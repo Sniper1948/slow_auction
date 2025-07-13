@@ -482,16 +482,16 @@ async def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
             now_ts, last_sync_ts, next_sync_ts = time.time(), sync_data[1], sync_data[2]
             logger.info(f"Sync data: Last @ {datetime.datetime.fromtimestamp(last_sync_ts, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}, Next @ {datetime.datetime.fromtimestamp(next_sync_ts, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
             
-            if next_sync_ts > now_ts and (next_sync_ts - now_ts < 20 * 3600): 
-                AUCTION_END_TIME = float(next_sync_ts)
+            if next_sync_ts > now_ts and (next_sync_ts - now_ts < 20 * 3600):
+                AUCTION_END_TIME = datetime.datetime.fromtimestamp(next_sync_ts, tz=datetime.timezone.utc)
             elif last_sync_ts > 0:
-                AUCTION_END_TIME = float(last_sync_ts + (12 * 3600)) 
-                logger.warning(f"next_sync invalid or too far, using fallback end time based on last_sync: {datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
-            else: 
+                AUCTION_END_TIME = datetime.datetime.fromtimestamp(last_sync_ts + (12 * 3600), tz=datetime.timezone.utc)
+                logger.warning(f"next_sync invalid or too far, using fallback end time based on last_sync: {AUCTION_END_TIME.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            else:
                 logger.error("Cannot determine valid auction end time from sync data after multiple attempts. Will retry state reset.")
                 raise ValueError("Invalid sync data for auction end time.")
 
-            logger.info(f"New AUCTION_END_TIME: {datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            logger.info(f"New AUCTION_END_TIME: {AUCTION_END_TIME.strftime('%Y-%m-%d %H:%M:%S %Z')}")
             
             initialize_bids_state(w3, sf_contract) 
             rewards_data = fetch_pool_rewards_data(sf_contract) 
@@ -1169,13 +1169,13 @@ w3_instance = connect_to_blockchain(SONIC_RPC_URLS)
 silver_fees_contract_instance = w3_instance.eth.contract(address=SILVER_FEES_CONTRACT_ADDRESS, abi=SILVER_FEES_ABI)
 pool_bidder_contract_instance = w3_instance.eth.contract(address=POOL_BIDDER_CONTRACT_ADDRESS, abi=POOL_BIDDER_ABI)
 
-def handle_auction_end(now_datetime_utc: datetime.datetime):
+async def handle_auction_end(now_datetime_utc: datetime.datetime, w3: Web3, sf_contract: Contract):
     """
     Handles the end of an auction cycle: logging rewards, generating reports, and resetting state.
     """
     global bid_log_data, reward_summary_data
 
-    logger.info(f"REAL AUCTION_END_TIME ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Processing rewards and resetting.")
+    logger.info(f"REAL AUCTION_END_TIME ({AUCTION_END_TIME.isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Processing rewards and resetting.")
     if SIMULATE_FINAL_WINDOW_MODE and simulation_has_run:
         logger.info("[SIMULATION] Note: Real auction cycle ended. Simulation was completed.")
 
@@ -1212,7 +1212,7 @@ def handle_auction_end(now_datetime_utc: datetime.datetime):
     bid_log_data.clear()
     logger.info("Bid log for the completed cycle has been cleared. Reward summary is cumulative.")
 
-    reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
+    await reset_auction_cycle_state(w3, sf_contract)
 
     # Log the state after reset to a file
     log_auction_state_to_file()
@@ -1295,7 +1295,7 @@ async def main(force_mode: bool = False):
 
     global current_auction_log_file # Ensure we're using the global
     if AUCTION_END_TIME:
-        auction_end_dt = datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc)
+        auction_end_dt = AUCTION_END_TIME
         current_auction_log_file = f"auction_state_{auction_end_dt.strftime('%Y%m%d_%H%M%S')}.log"
         logger.info(f"Auction state snapshot will be logged to: {current_auction_log_file}")
     else:
@@ -1337,14 +1337,10 @@ async def main(force_mode: bool = False):
             real_tte = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
 
             if real_tte < -1.5:
-                handle_auction_end(now_datetime_utc)
+                await handle_auction_end(now_datetime_utc, w3_instance, silver_fees_contract_instance)
                 continue
 
-            logger.debug(
-                f"TTE DEBUG: AUCTION_END_TIME={AUCTION_END_TIME:.4f} ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat()}), "
-                f"NOW_UTC={now_timestamp_utc:.4f} ({now_datetime_utc.isoformat()}), "
-                f"CALCULATED TTE = {time_to_auction_end:.2f}s"
-            )
+            logger.info(f"TTE: {time_to_auction_end:.2f}s")
 
             final_bid_window_active = (0 < time_to_auction_end <= FINAL_BID_WINDOW_START_TTE) or \
                                       (force_mode and 0 < time_to_auction_end)      

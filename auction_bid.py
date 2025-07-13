@@ -353,7 +353,7 @@ async def _retry_web3_call(func: callable, start_bn: int, end_bn: int, retries: 
             if attempt == retries:
                 logger_instance.error(f"Event fetch failed after {retries+1} retries for blocks {start_bn}-{end_bn}.")
                 return end_bn, None 
-            await asyncio.sleep(delay * (attempt + 1))
+            await asyncio.sleep(delay * (attempt + 1)) 
     return end_bn, None 
 
 def connect_to_blockchain(rpc_urls: List[str]) -> Web3:
@@ -409,7 +409,7 @@ async def update_bids_from_chain(w3: Web3, sf_contract: Contract, pools_to_check
     checked_count = 0
     for pid, pname in pools_to_check.items():
         if pool_count > 10 and checked_count > 0 and checked_count % 5 == 0: 
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.05) 
             
         user, bid_amt = get_current_bid(w3, sf_contract, pid, timeout=0.4) 
         current_local = highest_bids.get(pid, {"amount": 0.0, "user": "NO BIDDER"})
@@ -1174,7 +1174,7 @@ async def handle_auction_end(now_datetime_utc: datetime.datetime, w3: Web3, sf_c
     Handles the end of an auction cycle: logging rewards, generating reports, and resetting state.
     """
     global bid_log_data, reward_summary_data
-
+    
     logger.info(f"REAL AUCTION_END_TIME ({AUCTION_END_TIME.isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Processing rewards and resetting.")
     if SIMULATE_FINAL_WINDOW_MODE and simulation_has_run:
         logger.info("[SIMULATION] Note: Real auction cycle ended. Simulation was completed.")
@@ -1199,7 +1199,7 @@ async def handle_auction_end(now_datetime_utc: datetime.datetime, w3: Web3, sf_c
     bid_report_str = generate_bid_log_report(bid_log_data)
     reward_summary_str = generate_reward_summary_report(reward_summary_data)
     wallet_stats_str = generate_wallet_statistics_report(reward_summary_data)
-
+    
     print("\n" + "="*100)
     print("AUCTION CYCLE COMPLETED - REPORTS:")
     print("="*100)
@@ -1211,9 +1211,9 @@ async def handle_auction_end(now_datetime_utc: datetime.datetime, w3: Web3, sf_c
     # Clear logs and reset state for the next cycle
     bid_log_data.clear()
     logger.info("Bid log for the completed cycle has been cleared. Reward summary is cumulative.")
-
+    
     await reset_auction_cycle_state(w3, sf_contract)
-
+    
     # Log the state after reset to a file
     log_auction_state_to_file()
 
@@ -1546,9 +1546,9 @@ async def main(force_mode: bool = False):
                                 my_reactive_bids[p_id_hyper] = onchain_bid_amount_hyper
                                 logger.debug(f"Hyper-Reactive: Confirmed our lead on {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)} with updated amount {onchain_bid_amount_hyper:.4f}")
                             
-                            if len(my_reactive_bids) > 1: await asyncio.sleep(0.001)
+                            if len(my_reactive_bids) > 1: await asyncio.sleep(0.001) 
 
-                        await asyncio.sleep(HYPER_REACTIVE_CHECK_INTERVAL)
+                        await asyncio.sleep(HYPER_REACTIVE_CHECK_INTERVAL) 
                     logger.info("Exited HYPER-REACTIVE mode.")
                 else: 
                     logger.info("No pools identified for initial final batch bid, or initial batch failed/no pools to watch. Skipping hyper-reactive mode.")
@@ -1776,7 +1776,7 @@ async def main(force_mode: bool = False):
                 silver_fees_contract_instance = w3_instance.eth.contract(address=SILVER_FEES_CONTRACT_ADDRESS, abi=SILVER_FEES_ABI)
                 pool_bidder_contract_instance = w3_instance.eth.contract(address=POOL_BIDDER_CONTRACT_ADDRESS, abi=POOL_BIDDER_ABI)
                 logger.info("Successfully re-initialized Web3 and contract instances after connection error.")
-                await reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
+                await reset_auction_cycle_state(w3_instance, silver_fees_contract_instance) 
             except Exception as e_reinit_fail:
                 logger.critical(f"Failed to re-initialize after connection error: {e_reinit_fail}. Sleeping for 60s.")
                 await asyncio.sleep(60)

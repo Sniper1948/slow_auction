@@ -1679,12 +1679,14 @@ def main(force_mode: bool = False):
                 can_do_periodic_fetch = (time_to_auction_end > MIN_TTE_FOR_GENERAL_REWARD_FETCH and not is_early_bid_fetch_time and (now_timestamp_utc - last_reward_check_time >= PERIODIC_REWARD_FETCH_INTERVAL))
 
                 if can_do_periodic_fetch:
-                    logger.info(f"Periodic reward fetch (TTE: {time_to_auction_end:.2f}s)")
+                    pre_fetch_tte = time_to_auction_end
                     rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
                     for r_info in rewards_data:
                         if "error" not in r_info and r_info.get("pool_id"):
                             last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
-                    last_reward_check_time = now_timestamp_utc
+                    last_reward_check_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+                    post_fetch_tte = (AUCTION_END_TIME - last_reward_check_time) if AUCTION_END_TIME else float('inf')
+                    logger.info(f"Periodic reward fetch complete. TTE now: {post_fetch_tte:.2f}s (was {pre_fetch_tte:.2f}s before fetch).")
                 elif time_to_auction_end <= MIN_TTE_FOR_GENERAL_REWARD_FETCH:
                     logger.debug(f"Skipping general periodic reward fetch: TTE {time_to_auction_end:.2f}s <= MIN_TTE_FOR_GENERAL_REWARD_FETCH ({MIN_TTE_FOR_GENERAL_REWARD_FETCH}s).")
                 elif is_early_bid_fetch_time:

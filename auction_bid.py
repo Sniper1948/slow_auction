@@ -1315,23 +1315,27 @@ def main(force_mode: bool = False):
                 if not simulation_has_run: # Only set up and run the simulation once per script execution
                     if simulated_auction_end_time_override is None: # Initial setup for the single run
                         simulated_auction_end_time_override = now_timestamp_utc + SIMULATE_TTE_START
+                        simulation_has_run = True # Mark that we are doing/have done the one simulation run
                         logger.info(f"[SIMULATION] Starting ONE-TIME simulated TTE. Fake end time set to: {datetime.datetime.fromtimestamp(simulated_auction_end_time_override, tz=datetime.timezone.utc).isoformat()}")
 
+                if simulated_auction_end_time_override is not None: # If simulation has been set up (or has run)
                     time_to_auction_end = simulated_auction_end_time_override - now_timestamp_utc
-
-                    if time_to_auction_end < -1.5:
-                        logger.info("[SIMULATION] One-time simulation TTE has concluded.")
-                        simulation_has_run = True # Mark simulation as done for this script run
-                        # After simulation, the script will naturally fall back to the real TTE
-                        # in subsequent loop iterations because `simulation_has_run` is now True.
-                else:
-                    # Simulation has run, use real TTE
+                    # Optional: Log when the single simulation cycle effectively ends
+                    if time_to_auction_end < -1.5 and time_to_auction_end > -5.0 : # Log for a brief period after it ends
+                         # sausage = True # User had this to prevent log spam, can be removed or kept as a silent placeholder
+                         pass
+                else: # Simulation mode is on, but has_run is true, and override is None (should not happen with this logic if it ran once)
+                      # This case means the simulation finished, and we revert to real TTE for other checks.
                     time_to_auction_end = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
             else: # Not in simulation mode
                 time_to_auction_end = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
 
 
-            if time_to_auction_end < -1.5 and not (SIMULATE_FINAL_WINDOW_MODE and not simulation_has_run):
+            # Real auction end processing:
+            # This should only happen based on the REAL AUCTION_END_TIME, not the simulated one.
+            real_tte = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
+
+            if real_tte < -1.5:
                 handle_auction_end(now_datetime_utc)
                 continue
 
@@ -1351,11 +1355,12 @@ def main(force_mode: bool = False):
                 amounts_for_initial_batch_eth: List[float] = []
                 initial_batch_pre_bid_amounts: Dict[str, float] = {} 
 
-                for p_id, p_name in POOLS.items(): 
-                    current_tte_for_initial_check = AUCTION_END_TIME - datetime.datetime.now(datetime.timezone.utc).timestamp()
-                    if current_tte_for_initial_check <= MINIMUM_TTE_FOR_REACTION: 
+                for p_id, p_name in POOLS.items():
+                    end_time_to_use = simulated_auction_end_time_override if (SIMULATE_FINAL_WINDOW_MODE and simulated_auction_end_time_override is not None) else AUCTION_END_TIME
+                    current_tte_for_initial_check = end_time_to_use - datetime.datetime.now(datetime.timezone.utc).timestamp()
+                    if current_tte_for_initial_check <= MINIMUM_TTE_FOR_REACTION:
                         logger.debug(f"TTE {current_tte_for_initial_check:.3f}s too low, breaking from initial pool iteration for final bidding.")
-                        break 
+                        break
                     try:
                         current_bidder_onchain, onchain_bid_amount = get_current_bid(w3_instance, silver_fees_contract_instance, p_id, timeout=0.2)
                         reward = last_rewards.get(p_id) 

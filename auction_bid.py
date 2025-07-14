@@ -10,7 +10,6 @@ import random
 from math import ceil
 import threading # Added
 import copy # Added
-import asyncio
 
 from typing import Tuple, Dict, List, Any, Optional
 from web3 import Web3
@@ -263,13 +262,13 @@ class EventScanner:
         try: return datetime.datetime.fromtimestamp(self.w3.eth.get_block(bn)["timestamp"], tz=datetime.timezone.utc)
         except BlockNotFound: logger.warning(f"Block {bn} not found for TS, using now."); return datetime.datetime.now(tz=datetime.timezone.utc)
 
-    async def scan_single_chunk(self, start_bn: int, end_bn: int, timeout: float) -> Tuple[int, List[Dict]]:
+    def scan_single_chunk(self, start_bn: int, end_bn: int, timeout: float) -> Tuple[int, List[Dict]]:
         processed_in_chunk, highest_bn_in_chunk = [], start_bn -1 
         for evt_type in self.event_types:
             def fetch_logic(s, e): 
                 return _fetch_events_for_contract(self.w3, evt_type, {}, s, e, timeout, self.contract.address)
             
-            _, events_found = await _retry_web3_call(fetch_logic, start_bn, end_bn, self.max_req_retries, self.req_retry_secs, self.logger)
+            _, events_found = _retry_web3_call(fetch_logic, start_bn, end_bn, self.max_req_retries, self.req_retry_secs, self.logger)
 
             if events_found is None: 
                 self.logger.error(f"Event fetching failed persistently for chunk {start_bn}-{end_bn}. This chunk will be marked as scanned up to {end_bn} to prevent getting stuck, but no events processed from it.")
@@ -290,7 +289,7 @@ class EventScanner:
         else: new_cs = min(self.max_chunk_scan, int(current_cs * self.chunk_increase))
         return new_cs
 
-    async def scan(self, start_bn: int, end_bn: int, timeout: float, start_cs: int = 20) -> Tuple[List[Dict[str, Any]], int]:
+    def scan(self, start_bn: int, end_bn: int, timeout: float, start_cs: int = 20) -> Tuple[List[Dict[str, Any]], int]:
         if start_bn > end_bn: return [], 0
         current_bn, cs, total_chunks, all_processed = start_bn, max(self.min_scan_chunk, start_cs), 0, []
         
@@ -300,7 +299,7 @@ class EventScanner:
             self.state.start_chunk(current_bn, cs) 
             chunk_end_bn = min(current_bn + cs - 1, end_bn)
             
-            scanned_up_to_bn_for_chunk, new_evts = await self.scan_single_chunk(current_bn, chunk_end_bn, timeout)
+            scanned_up_to_bn_for_chunk, new_evts = self.scan_single_chunk(current_bn, chunk_end_bn, timeout)
             
             all_processed.extend(new_evts)
             self.state.end_chunk(scanned_up_to_bn_for_chunk) # This should be chunk_end_bn or the actual highest block scanned in the chunk
@@ -343,7 +342,7 @@ def _fetch_events_for_contract(w3: Web3, event_type: Any, filters: Dict[str, Any
         event_scanner_failed = True 
         return None 
 
-async def _retry_web3_call(func: callable, start_bn: int, end_bn: int, retries: int, delay: float, logger_instance: logging.Logger) -> Tuple[int, Optional[List[AttributeDict]]]:
+def _retry_web3_call(func: callable, start_bn: int, end_bn: int, retries: int, delay: float, logger_instance: logging.Logger) -> Tuple[int, Optional[List[AttributeDict]]]:
     for attempt in range(retries + 1):
         try:
             result = func(start_bn, end_bn)
@@ -353,7 +352,7 @@ async def _retry_web3_call(func: callable, start_bn: int, end_bn: int, retries: 
             if attempt == retries:
                 logger_instance.error(f"Event fetch failed after {retries+1} retries for blocks {start_bn}-{end_bn}.")
                 return end_bn, None 
-            await asyncio.sleep(delay * (attempt + 1)) 
+            time.sleep(delay * (attempt + 1))
     return end_bn, None 
 
 def connect_to_blockchain(rpc_urls: List[str]) -> Web3:
@@ -402,14 +401,14 @@ def initialize_bids_state(w3: Web3, sf_contract: Contract):
         if bid_amt > 0: logger.info(f"Init bid for {pname}: {bid_amt:.4f} $AG by {user}")
     logger.debug(f"Initialized highest_bids: {len(highest_bids)} entries.")
 
-async def update_bids_from_chain(w3: Web3, sf_contract: Contract, pools_to_check: Dict[str, str]):
+def update_bids_from_chain(w3: Web3, sf_contract: Contract, pools_to_check: Dict[str, str]):
     pool_count = len(pools_to_check)
     logger.debug(f"Updating bids from chain for {pool_count} pool(s)...")
     
     checked_count = 0
     for pid, pname in pools_to_check.items():
         if pool_count > 10 and checked_count > 0 and checked_count % 5 == 0: 
-            await asyncio.sleep(0.05) 
+            time.sleep(0.05)
             
         user, bid_amt = get_current_bid(w3, sf_contract, pid, timeout=0.4) 
         current_local = highest_bids.get(pid, {"amount": 0.0, "user": "NO BIDDER"})
@@ -460,7 +459,7 @@ def fetch_pool_rewards_data(sf_contract: Contract) -> List[Dict[str, Any]]:
                 results.append({"pool_id": pid, "pool_name": pname, "reward_agency": 0.0, "error": str(e)})
     return results
 
-async def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
+def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
     global AUCTION_END_TIME, highest_bids, last_rewards, hot_list_created, early_bid_times_queue, early_bids_processed_for_threshold
     global last_reward_check_time, POOLS, pool_locks, GLOBAL_AVG_BLOCK_TIME, CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK
     logger.info("Resetting state for new auction cycle...")
@@ -483,15 +482,15 @@ async def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
             logger.info(f"Sync data: Last @ {datetime.datetime.fromtimestamp(last_sync_ts, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}, Next @ {datetime.datetime.fromtimestamp(next_sync_ts, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
             
             if next_sync_ts > now_ts and (next_sync_ts - now_ts < 20 * 3600):
-                AUCTION_END_TIME = datetime.datetime.fromtimestamp(next_sync_ts, tz=datetime.timezone.utc)
+                AUCTION_END_TIME = float(next_sync_ts)
             elif last_sync_ts > 0:
-                AUCTION_END_TIME = datetime.datetime.fromtimestamp(last_sync_ts + (12 * 3600), tz=datetime.timezone.utc)
-                logger.warning(f"next_sync invalid or too far, using fallback end time based on last_sync: {AUCTION_END_TIME.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+                AUCTION_END_TIME = float(last_sync_ts + (12 * 3600))
+                logger.warning(f"next_sync invalid or too far, using fallback end time based on last_sync: {datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
             else:
                 logger.error("Cannot determine valid auction end time from sync data after multiple attempts. Will retry state reset.")
                 raise ValueError("Invalid sync data for auction end time.")
 
-            logger.info(f"New AUCTION_END_TIME: {AUCTION_END_TIME.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            logger.info(f"New AUCTION_END_TIME: {datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
             
             initialize_bids_state(w3, sf_contract) 
             rewards_data = fetch_pool_rewards_data(sf_contract) 
@@ -538,7 +537,7 @@ async def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
         except Exception as e:
             logger.warning(f"Auction reset attempt {attempt+1} failed: {e}")
             if attempt < 4: 
-                await asyncio.sleep((attempt + 1) * 2)
+                time.sleep((attempt + 1) * 2)
             else:
                 logger.critical("All attempts to reset auction state failed. Exiting.")
                 sys.exit(1) 
@@ -1169,13 +1168,13 @@ w3_instance = connect_to_blockchain(SONIC_RPC_URLS)
 silver_fees_contract_instance = w3_instance.eth.contract(address=SILVER_FEES_CONTRACT_ADDRESS, abi=SILVER_FEES_ABI)
 pool_bidder_contract_instance = w3_instance.eth.contract(address=POOL_BIDDER_CONTRACT_ADDRESS, abi=POOL_BIDDER_ABI)
 
-async def handle_auction_end(now_datetime_utc: datetime.datetime, w3: Web3, sf_contract: Contract):
+def handle_auction_end(now_datetime_utc: datetime.datetime):
     """
     Handles the end of an auction cycle: logging rewards, generating reports, and resetting state.
     """
     global bid_log_data, reward_summary_data
-    
-    logger.info(f"REAL AUCTION_END_TIME ({AUCTION_END_TIME.isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Processing rewards and resetting.")
+
+    logger.info(f"REAL AUCTION_END_TIME ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Processing rewards and resetting.")
     if SIMULATE_FINAL_WINDOW_MODE and simulation_has_run:
         logger.info("[SIMULATION] Note: Real auction cycle ended. Simulation was completed.")
 
@@ -1199,7 +1198,7 @@ async def handle_auction_end(now_datetime_utc: datetime.datetime, w3: Web3, sf_c
     bid_report_str = generate_bid_log_report(bid_log_data)
     reward_summary_str = generate_reward_summary_report(reward_summary_data)
     wallet_stats_str = generate_wallet_statistics_report(reward_summary_data)
-    
+
     print("\n" + "="*100)
     print("AUCTION CYCLE COMPLETED - REPORTS:")
     print("="*100)
@@ -1211,13 +1210,13 @@ async def handle_auction_end(now_datetime_utc: datetime.datetime, w3: Web3, sf_c
     # Clear logs and reset state for the next cycle
     bid_log_data.clear()
     logger.info("Bid log for the completed cycle has been cleared. Reward summary is cumulative.")
-    
-    await reset_auction_cycle_state(w3, sf_contract)
-    
+
+    reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
+
     # Log the state after reset to a file
     log_auction_state_to_file()
 
-async def main(force_mode: bool = False):
+def main(force_mode: bool = False):
     global AUCTION_END_TIME, highest_bids, last_rewards, event_scanner_failed
     global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold
     global last_reward_check_time, POOLS, pool_locks, GLOBAL_AVG_BLOCK_TIME, CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK
@@ -1233,7 +1232,7 @@ async def main(force_mode: bool = False):
     try:
         startup_block_num = w3_instance.eth.block_number
         startup_time = time.monotonic()
-        await asyncio.sleep(BLOCK_TIME_ESTIMATION_SECONDS)
+        time.sleep(BLOCK_TIME_ESTIMATION_SECONDS)
         current_block_num = w3_instance.eth.block_number
         current_time = time.monotonic()
 
@@ -1290,12 +1289,12 @@ async def main(force_mode: bool = False):
 
     last_pb_bal_check_time, last_bid_update_time, last_evt_scan_time = 0.0, 0.0, 0.0
     
-    try: await reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
+    try: reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
     except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
 
     global current_auction_log_file # Ensure we're using the global
     if AUCTION_END_TIME:
-        auction_end_dt = AUCTION_END_TIME
+        auction_end_dt = datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc)
         current_auction_log_file = f"auction_state_{auction_end_dt.strftime('%Y%m%d_%H%M%S')}.log"
         logger.info(f"Auction state snapshot will be logged to: {current_auction_log_file}")
     else:
@@ -1309,7 +1308,7 @@ async def main(force_mode: bool = False):
 
             if AUCTION_END_TIME is None: 
                 logger.error("AUCTION_END_TIME is None mid-loop, attempting reset.")
-                await reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
+                reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
                 continue
             
             if SIMULATE_FINAL_WINDOW_MODE:
@@ -1337,10 +1336,14 @@ async def main(force_mode: bool = False):
             real_tte = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
 
             if real_tte < -1.5:
-                await handle_auction_end(now_datetime_utc, w3_instance, silver_fees_contract_instance)
+                handle_auction_end(now_datetime_utc)
                 continue
 
-            logger.info(f"TTE: {time_to_auction_end:.2f}s")
+            logger.debug(
+                f"TTE DEBUG: AUCTION_END_TIME={AUCTION_END_TIME:.4f} ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat()}), "
+                f"NOW_UTC={now_timestamp_utc:.4f} ({now_datetime_utc.isoformat()}), "
+                f"CALCULATED TTE = {time_to_auction_end:.2f}s"
+            )
 
             final_bid_window_active = (0 < time_to_auction_end <= FINAL_BID_WINDOW_START_TTE) or \
                                       (force_mode and 0 < time_to_auction_end)      
@@ -1418,7 +1421,7 @@ async def main(force_mode: bool = False):
                     current_dumb_bid_targets = dict(initial_batch_optimistic_bids)
 
                     for i_dumb_repeat in range(DUMB_BID_REPEATS):
-                        await asyncio.sleep(DUMB_BID_REPEAT_DELAY)
+                        time.sleep(DUMB_BID_REPEAT_DELAY)
                         current_tte_dumb = AUCTION_END_TIME - time.time()
 
                         if current_tte_dumb <= MINIMUM_TTE_FOR_DUMB_BID:
@@ -1546,9 +1549,9 @@ async def main(force_mode: bool = False):
                                 my_reactive_bids[p_id_hyper] = onchain_bid_amount_hyper
                                 logger.debug(f"Hyper-Reactive: Confirmed our lead on {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)} with updated amount {onchain_bid_amount_hyper:.4f}")
                             
-                            if len(my_reactive_bids) > 1: await asyncio.sleep(0.001) 
+                            if len(my_reactive_bids) > 1: time.sleep(0.001)
 
-                        await asyncio.sleep(HYPER_REACTIVE_CHECK_INTERVAL) 
+                        time.sleep(HYPER_REACTIVE_CHECK_INTERVAL)
                     logger.info("Exited HYPER-REACTIVE mode.")
                 else: 
                     logger.info("No pools identified for initial final batch bid, or initial batch failed/no pools to watch. Skipping hyper-reactive mode.")
@@ -1569,7 +1572,7 @@ async def main(force_mode: bool = False):
                    (now_timestamp_utc - last_bid_update_time >= bid_upd_interval):
                     pools_for_update = POOLS if hot_list_created and POOLS else POOLS_ORIGINAL
                     logger.info(f"Bid update interval reached. Updating {len(pools_for_update)} pools.")
-                    await update_bids_from_chain(w3_instance, silver_fees_contract_instance, pools_for_update)
+                    update_bids_from_chain(w3_instance, silver_fees_contract_instance, pools_for_update)
                     last_bid_update_time = now_timestamp_utc
                 
                 # Determine if early bids should be processed (not in simulation and conditions met)
@@ -1730,7 +1733,7 @@ async def main(force_mode: bool = False):
                             CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK = None  # Consume it
 
                         logger.info(f"Scanning for SnatchAuction events from block {current_from_block} to {to_block}")
-                        processed_event_details, num_chunks = await event_scanner.scan(start_bn=current_from_block, end_bn=to_block, timeout=10)
+                        processed_event_details, num_chunks = event_scanner.scan(start_bn=current_from_block, end_bn=to_block, timeout=10)
                         
                         if processed_event_details:
                             logger.info(f"Processing {len(processed_event_details)} SnatchAuction events for bid log.")
@@ -1770,25 +1773,25 @@ async def main(force_mode: bool = False):
                     logger.error(f"Error during periodic SnatchAuction event scan: {e_scan}", exc_info=True)
         except ConnectionError as e_conn_main:
             logger.error(f"Main Loop RPC Connection Error: {e_conn_main}. Attempting to re-initialize...")
-            await asyncio.sleep(10)
+            time.sleep(10)
             try:
                 w3_instance = connect_to_blockchain(SONIC_RPC_URLS)
                 silver_fees_contract_instance = w3_instance.eth.contract(address=SILVER_FEES_CONTRACT_ADDRESS, abi=SILVER_FEES_ABI)
                 pool_bidder_contract_instance = w3_instance.eth.contract(address=POOL_BIDDER_CONTRACT_ADDRESS, abi=POOL_BIDDER_ABI)
                 logger.info("Successfully re-initialized Web3 and contract instances after connection error.")
-                await reset_auction_cycle_state(w3_instance, silver_fees_contract_instance) 
+                reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
             except Exception as e_reinit_fail:
                 logger.critical(f"Failed to re-initialize after connection error: {e_reinit_fail}. Sleeping for 60s.")
-                await asyncio.sleep(60)
-        except ContractLogicError as e_cl_main: logger.error(f"Main Loop ContractLogicError: {e_cl_main}"); await asyncio.sleep(3)
-        except Exception as e_unhandled_main: logger.exception(f"Unhandled Main Loop Error: {e_unhandled_main}"); await asyncio.sleep(5)
+                time.sleep(60)
+        except ContractLogicError as e_cl_main: logger.error(f"Main Loop ContractLogicError: {e_cl_main}"); time.sleep(3)
+        except Exception as e_unhandled_main: logger.exception(f"Unhandled Main Loop Error: {e_unhandled_main}"); time.sleep(5)
 
 if __name__ == "__main__":
     try:
         if not POOLS_ORIGINAL: POOLS_ORIGINAL.update(POOLS) 
         if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()}
         force_arg = "--force" in sys.argv
-        asyncio.run(main(force_mode=force_arg))
+        main(force_mode=force_arg)
     except KeyboardInterrupt: logger.info("Script terminated by user (Ctrl+C).")
     except Exception as e_crit_top:
         logger.critical(f"Critical script error at top level: {e_crit_top}", exc_info=True)

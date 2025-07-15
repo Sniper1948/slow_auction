@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from threading import Lock
 
 # Script version
-SCRIPT_VERSION = "1.6.0" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.1" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -505,7 +505,7 @@ def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
 
             if current_cycle_start_approx_ts > 0:
                 scan_target_timestamp = current_cycle_start_approx_ts + (16 * 60) 
-                logger.info(f"Calculating smart start block for event scan. Approx cycle start: {datetime.datetime.fromtimestamp(current_cycle_start_approx_ts, tz=datetime.timezone.utc).isoformat()}, Target scan time: {datetime.datetime.fromtimestamp(scan_target_timestamp, tz=datetime.timezone.utc).isoformat()}")
+                logger.info(f"Calculating smart start block for event scan. Approx cycle start: {datetime.datetime.fromtimestamp(current_cycle_start_approx_ts, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f%z')}, Target scan time: {datetime.datetime.fromtimestamp(scan_target_timestamp, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f%z')}")
                 try:
                     latest_block_num_for_est = w3.eth.block_number
                     block = w3.eth.get_block(latest_block_num_for_est)
@@ -851,7 +851,7 @@ def get_block_number_for_target_timestamp(
     Estimates and iteratively finds a block number near a target_timestamp.
     Aims for a block whose timestamp is >= target_timestamp and <= target_timestamp + accepted_window_seconds.
     """
-    logger.info(f"Attempting to find block near timestamp: {datetime.datetime.fromtimestamp(target_timestamp, tz=datetime.timezone.utc).isoformat()}")
+    logger.info(f"Attempting to find block near timestamp: {datetime.datetime.fromtimestamp(target_timestamp, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f%z')}")
     
     try:
         if current_block_data:
@@ -1109,7 +1109,7 @@ def log_auction_state_to_file():
             auction_end_time_iso = "N/A"
             if AUCTION_END_TIME is not None:
                 current_tte_str = f"{AUCTION_END_TIME - log_timestamp_utc.timestamp():.2f}s"
-                auction_end_time_iso = datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d T %H:%M:%S.%f%z')
+                auction_end_time_iso = datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f%z')
 
             # Prepare data for JSON serialization
             # Use pool names instead of addresses as keys where it makes sense for readability
@@ -1174,7 +1174,7 @@ def handle_auction_end(now_datetime_utc: datetime.datetime):
     """
     global bid_log_data, reward_summary_data
 
-    logger.info(f"REAL AUCTION_END_TIME ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Processing rewards and resetting.")
+    logger.info(f"REAL AUCTION_END_TIME ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f%z') if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.strftime('%Y-%m-%d %H:%M:%S.%f%z')}). Processing rewards and resetting.")
     if SIMULATE_FINAL_WINDOW_MODE and simulation_has_run:
         logger.info("[SIMULATION] Note: Real auction cycle ended. Simulation was completed.")
 
@@ -1316,7 +1316,7 @@ def main(force_mode: bool = False):
                     if simulated_auction_end_time_override is None: # Initial setup for the single run
                         simulated_auction_end_time_override = now_timestamp_utc + SIMULATE_TTE_START
                         simulation_has_run = True # Mark that we are doing/have done the one simulation run
-                        logger.info(f"[SIMULATION] Starting ONE-TIME simulated TTE. Fake end time set to: {datetime.datetime.fromtimestamp(simulated_auction_end_time_override, tz=datetime.timezone.utc).isoformat()}")
+                        logger.info(f"[SIMULATION] Starting ONE-TIME simulated TTE. Fake end time set to: {datetime.datetime.fromtimestamp(simulated_auction_end_time_override, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f%z')}")
 
                 if simulated_auction_end_time_override is not None: # If simulation has been set up (or has run)
                     time_to_auction_end = simulated_auction_end_time_override - now_timestamp_utc
@@ -1340,8 +1340,8 @@ def main(force_mode: bool = False):
                 continue
 
             logger.debug(
-                f"TTE DEBUG: AUCTION_END_TIME={AUCTION_END_TIME:.4f} ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat()}), "
-                f"NOW_UTC={now_timestamp_utc:.4f} ({now_datetime_utc.isoformat()}), "
+                f"TTE DEBUG: AUCTION_END_TIME={AUCTION_END_TIME:.4f} ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f%z')}), "
+                f"NOW_UTC={now_timestamp_utc:.4f} ({now_datetime_utc.strftime('%Y-%m-%d %H:%M:%S.%f%z')}), "
                 f"CALCULATED TTE = {time_to_auction_end:.2f}s"
             )
 

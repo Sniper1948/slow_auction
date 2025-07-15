@@ -482,9 +482,9 @@ def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
             logger.info(f"Sync data: Last @ {datetime.datetime.fromtimestamp(last_sync_ts, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}, Next @ {datetime.datetime.fromtimestamp(next_sync_ts, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
             
             if next_sync_ts > now_ts and (next_sync_ts - now_ts < 20 * 3600):
-                AUCTION_END_TIME = float(next_sync_ts)
+                AUCTION_END_TIME = time.time() + (next_sync_ts - now_ts)
             elif last_sync_ts > 0:
-                AUCTION_END_TIME = float(last_sync_ts + (12 * 3600))
+                AUCTION_END_TIME = time.time() + ((last_sync_ts + 43200) - now_ts)
                 logger.warning(f"next_sync invalid or too far, using fallback end time based on last_sync: {datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
             else:
                 logger.error("Cannot determine valid auction end time from sync data after multiple attempts. Will retry state reset.")
@@ -1109,7 +1109,7 @@ def log_auction_state_to_file():
             auction_end_time_iso = "N/A"
             if AUCTION_END_TIME is not None:
                 current_tte_str = f"{AUCTION_END_TIME - log_timestamp_utc.timestamp():.2f}s"
-                auction_end_time_iso = datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat()
+                auction_end_time_iso = datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).strftime('%Y-%m-%d T %H:%M:%S.%f%z')
 
             # Prepare data for JSON serialization
             # Use pool names instead of addresses as keys where it makes sense for readability

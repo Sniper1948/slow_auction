@@ -145,8 +145,8 @@ EARLY_BID_MAX_REWARD_FOR_0_1_AG_BID = 0.2
 EARLY_BID_FIXED_AMOUNT = 0.1
 CONTRACT_DEFAULT_INCREMENT_AMOUNT = 0.1 # Standard increment your contract uses when bid amount 0 is passed
 
-HOT_LIST_CREATION_START_TTE = 45  # Start creating hot list 45s before end
-HOT_LIST_CREATION_END_TTE = 25    # Aim to have it done by 25s before end
+HOT_LIST_CREATION_START_TTE = 300  # Start creating hot list 5 minutes before end
+HOT_LIST_CREATION_END_TTE = 280    # Aim to have it done by 4m 40s before end
 HOT_LIST_MIN_POTENTIAL_PROFIT = 0.01 # Reward > (current_bid + CONTRACT_DEFAULT_INCREMENT_AMOUNT) + THIS
 
 FINAL_BID_WINDOW_START_TTE = 0.9 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
@@ -183,7 +183,7 @@ DUMB_BID_PROFIT_MARGIN_ASSUMPTION: float = float(os.getenv('DUMB_BID_PROFIT_MARG
 MINIMUM_TTE_FOR_DUMB_BID: float = float(os.getenv('MINIMUM_TTE_FOR_DUMB_BID', '0.05'))
 
 
-MIN_TTE_FOR_GENERAL_REWARD_FETCH = 45 # No general reward HTTP calls if TTE < 45s
+MIN_TTE_FOR_GENERAL_REWARD_FETCH = 301 # No general reward HTTP calls if TTE < 301s
 PERIODIC_REWARD_FETCH_INTERVAL = 40 # How often to fetch rewards when safe
 EARLY_BID_REWARD_FETCH_INTERVAL = 3   # How often to fetch for early bids if needed
 
@@ -1656,6 +1656,14 @@ def main(force_mode: bool = False):
                             pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
                     hot_list_created = True
                     log_auction_state_to_file() # Log state after hotlist determination
+
+                if hot_list_created and 45 < time_to_auction_end <= 50:
+                    logger.info(f"Refreshing rewards for hot list pools (TTE: {time_to_auction_end:.2f}s)")
+                    rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
+                    for r_info in rewards_data:
+                        if "error" not in r_info and r_info.get("pool_id") in POOLS:
+                            last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
+                    last_reward_check_time = now_timestamp_utc
                                                             
                 is_early_bid_fetch_time = (early_bid_times_queue and 
                                         (early_bid_times_queue[0] - EARLY_BID_REWARD_FETCH_INTERVAL - 2 < time_to_auction_end <= early_bid_times_queue[0] + 5))

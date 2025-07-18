@@ -375,23 +375,10 @@ def connect_to_blockchain(rpc_urls: List[str]) -> Web3:
     raise ConnectionError("No valid RPC available after multiple attempts.")
 
 def get_current_bid(w3: Web3, sf_contract: Contract, pool_id: str, timeout: float = 1.0) -> Tuple[str, float]:
-    pool_name = POOLS_ORIGINAL.get(pool_id, pool_id)
-    try:
-        data = sf_contract.functions.snatchData(pool_id).call()
-        if not data or data[0][0] == '0x0000000000000000000000000000000000000000':
-            return "NO BIDDER", 0.0
-        user, bid_wei = Web3.to_checksum_address(data[0][0]), int(data[0][1])
-        bid_eth = float(w3.from_wei(bid_wei, 'ether'))
-        return user, bid_eth
-    except ContractLogicError as e:
-        logger.error(f"snatchData ContractLogicError for {pool_name} ({pool_id}): {e}")
-        return "NO BIDDER", 0.0
-    except Exception as e:
-        if "timeout" not in str(e).lower() and "connection aborted" not in str(e).lower() :
-            logger.error(f"Generic error in get_current_bid for {pool_name} ({pool_id}): {e}", exc_info=False)
-        else:
-            logger.debug(f"Timeout/Connection error in get_current_bid for {pool_name} ({pool_id}): {e}")
-        return "NO BIDDER", 0.0
+    # This function is too slow and will be replaced with a multicall implementation.
+    # For now, we will just log a message and return a dummy value.
+    logger.info("Bypassing `get_current_bid` to prevent blocking.")
+    return "NO BIDDER", 0.0
 
 def initialize_bids_state(w3: Web3, sf_contract: Contract):
     global highest_bids, pool_locks
@@ -1469,83 +1456,6 @@ def main(force_mode: bool = False):
                             break # Stop dumb bidding if a batch fails
                     logger.info("--- Finished Dumb Bidding Mode sequence ---")
                     break
-
-                elif not DUMB_BIDDING_MODE and batch_success and initial_batch_optimistic_bids:
-                    # Populate my_reactive_bids only if not in dumb mode and initial batch was successful
-                    my_reactive_bids = dict(initial_batch_optimistic_bids)
-                    logger.info(f"Entering HYPER-REACTIVE mode for pools: {[POOLS_ORIGINAL.get(p, p) for p in my_reactive_bids.keys()]}")
-                    
-                    # --- EXISTING HYPER-REACTIVE LOOP (indented under this 'elif') ---
-                    while True:
-                        now_ts_in_hyper_loop = datetime.datetime.now(datetime.timezone.utc).timestamp()
-                        current_tte_hyper = AUCTION_END_TIME - now_ts_in_hyper_loop
-                        
-                        if current_tte_hyper <= MINIMUM_TTE_FOR_REACTION:
-                            logger.info(f"Exiting HYPER-REACTIVE mode: TTE {current_tte_hyper:.3f}s <= {MINIMUM_TTE_FOR_REACTION}s")
-                            break
-                        
-                        if not my_reactive_bids: 
-                            logger.info("Exiting HYPER-REACTIVE mode: No more pools to watch.")
-                            break
-
-                        for p_id_hyper in list(my_reactive_bids.keys()): 
-                            current_tte_for_pool_check = AUCTION_END_TIME - datetime.datetime.now(datetime.timezone.utc).timestamp()
-                            if current_tte_for_pool_check <= MINIMUM_TTE_FOR_REACTION:
-                                continue 
-
-                            current_bidder_onchain_hyper, onchain_bid_amount_hyper = get_current_bid(
-                                w3_instance, silver_fees_contract_instance, p_id_hyper, timeout=GET_CURRENT_BID_TIMEOUT_HYPER
-                            )
-                            my_last_intended_bid_for_pool = my_reactive_bids.get(p_id_hyper, 0.0)
-
-                            is_outbid = False
-                            if current_bidder_onchain_hyper != POOL_BIDDER_CONTRACT_ADDRESS:
-                                if onchain_bid_amount_hyper >= my_last_intended_bid_for_pool - 1e-9: 
-                                    is_outbid = True
-                            elif onchain_bid_amount_hyper > my_last_intended_bid_for_pool + 1e-9: 
-                                is_outbid = True 
-                            
-                            if is_outbid:
-                                reward_hyper = last_rewards.get(p_id_hyper)
-                                if reward_hyper is not None:
-                                    next_bid_target = round(onchain_bid_amount_hyper + CONTRACT_DEFAULT_INCREMENT_AMOUNT, 8)
-                                    
-                                    is_profitable_to_counter = reward_hyper > next_bid_target + FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN
-                                    
-                                    should_attempt_reactive_bid = False
-                                    if current_bidder_onchain_hyper != POOL_BIDDER_CONTRACT_ADDRESS: 
-                                        should_attempt_reactive_bid = True
-                                    elif next_bid_target > my_last_intended_bid_for_pool + 1e-9: 
-                                        should_attempt_reactive_bid = True
-
-                                    if is_profitable_to_counter and should_attempt_reactive_bid :
-                                        logger.info(f"Hyper-Reactive: Condition met for {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}. Onchain: {onchain_bid_amount_hyper:.4f} by {current_bidder_onchain_hyper}. MyLastIntended: {my_last_intended_bid_for_pool:.4f}. Countering for ~{next_bid_target:.4f}. TTE: {current_tte_hyper:.3f}s")
-                                        bid_success_reactive, tx_hash_reactive = place_bid_with_poolbidder(
-                                            w3_instance, pool_bidder_contract_instance, 0.0, p_id_hyper, "URGENT"
-                                        )
-                                        if bid_success_reactive:
-                                            my_reactive_bids[p_id_hyper] = next_bid_target 
-                                            highest_bids[p_id_hyper] = { 
-                                                "amount": next_bid_target,
-                                                "user": POOL_BIDDER_CONTRACT_ADDRESS,
-                                                "tx_hash": tx_hash_reactive 
-                                            }
-                                    elif not is_profitable_to_counter:
-                                        logger.debug(f"Hyper-Reactive: Skipping {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}, not profitable. Reward: {reward_hyper:.4f}, Next Target: {next_bid_target:.4f}")
-                                    else: 
-                                        logger.debug(f"Hyper-Reactive: We are likely leading {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)} and new target {next_bid_target:.4f} isn't a necessary increase over last intended {my_last_intended_bid_for_pool:.4f}, or current onchain {onchain_bid_amount_hyper:.4f} is already good.")
-                                        if current_bidder_onchain_hyper == POOL_BIDDER_CONTRACT_ADDRESS and onchain_bid_amount_hyper > my_last_intended_bid_for_pool:
-                                            my_reactive_bids[p_id_hyper] = onchain_bid_amount_hyper
-                                else: 
-                                    logger.warning(f"Hyper-Reactive: No reward data for {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}, cannot counter bid.")
-                            elif current_bidder_onchain_hyper == POOL_BIDDER_CONTRACT_ADDRESS and onchain_bid_amount_hyper > my_last_intended_bid_for_pool + 1e-9:
-                                my_reactive_bids[p_id_hyper] = onchain_bid_amount_hyper
-                                logger.debug(f"Hyper-Reactive: Confirmed our lead on {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)} with updated amount {onchain_bid_amount_hyper:.4f}")
-                            
-                            if len(my_reactive_bids) > 1: time.sleep(0.001) 
-
-                        time.sleep(HYPER_REACTIVE_CHECK_INTERVAL) 
-                    logger.info("Exited HYPER-REACTIVE mode.")
                 else: 
                     logger.info("No pools identified for initial final batch bid, or initial batch failed/no pools to watch. Skipping hyper-reactive mode.")
 

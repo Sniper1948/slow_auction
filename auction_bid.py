@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from threading import Lock
 
 # Script version
-SCRIPT_VERSION = "1.6.0" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.3" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',

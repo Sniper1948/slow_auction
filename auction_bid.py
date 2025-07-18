@@ -411,36 +411,10 @@ def update_bids_from_chain(w3: Web3, sf_contract: Contract, pools_to_check: Dict
 
 
 def fetch_pool_rewards_data(sf_contract: Contract) -> List[Dict[str, Any]]:
-    logger.debug(f"Fetching pool rewards for {len(POOLS_ORIGINAL)} pools")
-    results = []
-    with requests.Session() as session:
-        for pid, pname in POOLS_ORIGINAL.items():
-            try:
-                snatch_data_tuple = sf_contract.functions.snatchData(pid).call()
-                last_exec = snatch_data_tuple[1]
-                period_hrs = ceil((time.time() - last_exec) / 3600) if last_exec > 0 else 12
-                if period_hrs <= 0: period_hrs = 1
-
-                payload = {"chainId": 146, "poolId": pid, "tokenGiven": AG_TOKEN, "periodInHours": period_hrs, "id": str(uuid.uuid4())}
-                api_url = f"https://silverswap.io/api/getLiquidityPoolInterests?t={int(time.time()*1000)}"
-                resp = session.post(api_url, headers=HEADERS, json=payload, timeout=15)
-                resp.raise_for_status(); data = resp.json()
-                reward_val = data.get("totalInGiven", 0) * 0.425
-                results.append({
-                    "pool_id": pid, 
-                    "pool_name": pname, 
-                    "reward_agency": reward_val, 
-                    "total_value_raw": data.get("totalInGiven",0),
-                    "api_period_hours_sent": period_hrs,
-                    "api_last_execution_used": last_exec
-                })
-            except requests.exceptions.RequestException as he: 
-                logger.error(f"Reward HTTP error for {pname} ({pid}) URL {api_url}: {he}")
-                results.append({"pool_id": pid, "pool_name": pname, "reward_agency": 0.0, "error": str(he)})
-            except Exception as e: 
-                logger.error(f"Reward fetch general error for {pname} ({pid}): {e}", exc_info=False)
-                results.append({"pool_id": pid, "pool_name": pname, "reward_agency": 0.0, "error": str(e)})
-    return results
+    # This function is too slow and will be replaced with a multicall implementation.
+    # For now, we will just log a message and return.
+    logger.info("Bypassing `fetch_pool_rewards_data` to prevent blocking.")
+    return []
 
 def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
     global AUCTION_END_TIME, highest_bids, last_rewards, hot_list_created, early_bid_times_queue, early_bids_processed_for_threshold
@@ -1406,7 +1380,9 @@ def main(force_mode: bool = False):
 
                     for i_dumb_repeat in range(DUMB_BID_REPEATS):
                         time.sleep(DUMB_BID_REPEAT_DELAY)
-                        current_tte_dumb = AUCTION_END_TIME - time.time()
+
+                        end_time_for_dumb_check = simulated_auction_end_time_override if SIMULATE_FINAL_WINDOW_MODE and simulated_auction_end_time_override is not None else AUCTION_END_TIME
+                        current_tte_dumb = end_time_for_dumb_check - datetime.datetime.now(datetime.timezone.utc).timestamp()
 
                         if current_tte_dumb <= MINIMUM_TTE_FOR_DUMB_BID:
                             logger.info(f"Dumb Bid Repeat {i_dumb_repeat+1}: TTE {current_tte_dumb:.3f}s too low (<= {MINIMUM_TTE_FOR_DUMB_BID}s), stopping dumb bids.")
@@ -1460,6 +1436,7 @@ def main(force_mode: bool = False):
                             logger.error(f"Dumb Bid Repeat {i_dumb_repeat+1} FAILED. Tx/Error: {dumb_repeat_tx_hash if dumb_repeat_tx_hash else 'Pre-flight fail'}. Stopping dumb bids.")
                             break # Stop dumb bidding if a batch fails
                     logger.info("--- Finished Dumb Bidding Mode sequence ---")
+                    break
 
                 elif not DUMB_BIDDING_MODE and batch_success and initial_batch_optimistic_bids:
                     # Populate my_reactive_bids only if not in dumb mode and initial batch was successful

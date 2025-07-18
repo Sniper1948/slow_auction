@@ -411,10 +411,36 @@ def update_bids_from_chain(w3: Web3, sf_contract: Contract, pools_to_check: Dict
 
 
 def fetch_pool_rewards_data(sf_contract: Contract) -> List[Dict[str, Any]]:
-    # This function is too slow and will be replaced with a multicall implementation.
-    # For now, we will just log a message and return.
-    logger.info("Bypassing `fetch_pool_rewards_data` to prevent blocking.")
-    return []
+    logger.debug(f"Fetching pool rewards for {len(POOLS_ORIGINAL)} pools")
+    results = []
+    with requests.Session() as session:
+        for pid, pname in POOLS_ORIGINAL.items():
+            try:
+                snatch_data_tuple = sf_contract.functions.snatchData(pid).call()
+                last_exec = snatch_data_tuple[1]
+                period_hrs = ceil((time.time() - last_exec) / 3600) if last_exec > 0 else 12
+                if period_hrs <= 0: period_hrs = 1
+
+                payload = {"chainId": 146, "poolId": pid, "tokenGiven": AG_TOKEN, "periodInHours": period_hrs, "id": str(uuid.uuid4())}
+                api_url = f"https://silverswap.io/api/getLiquidityPoolInterests?t={int(time.time()*1000)}"
+                resp = session.post(api_url, headers=HEADERS, json=payload, timeout=15)
+                resp.raise_for_status(); data = resp.json()
+                reward_val = data.get("totalInGiven", 0) * 0.425
+                results.append({
+                    "pool_id": pid,
+                    "pool_name": pname,
+                    "reward_agency": reward_val,
+                    "total_value_raw": data.get("totalInGiven",0),
+                    "api_period_hours_sent": period_hrs,
+                    "api_last_execution_used": last_exec
+                })
+            except requests.exceptions.RequestException as he:
+                logger.error(f"Reward HTTP error for {pname} ({pid}) URL {api_url}: {he}")
+                results.append({"pool_id": pid, "pool_name": pname, "reward_agency": 0.0, "error": str(he)})
+            except Exception as e:
+                logger.error(f"Reward fetch general error for {pname} ({pid}): {e}", exc_info=False)
+                results.append({"pool_id": pid, "pool_name": pname, "reward_agency": 0.0, "error": str(e)})
+    return results
 
 def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
     global AUCTION_END_TIME, highest_bids, last_rewards, hot_list_created, early_bid_times_queue, early_bids_processed_for_threshold
@@ -1139,6 +1165,19 @@ def final_window_trigger_thread():
                 break
         time.sleep(0.01)
 
+def periodic_reward_fetch_thread():
+    global last_rewards, last_reward_check_time, silver_fees_contract_instance
+    while True:
+        if not final_window_is_active:
+            logger.info("Periodic reward fetch thread fetching rewards...")
+            rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
+            for r_info in rewards_data:
+                if "error" not in r_info and r_info.get("pool_id"):
+                    last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
+            last_reward_check_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+            logger.info("Periodic reward fetch thread finished.")
+        time.sleep(PERIODIC_REWARD_FETCH_INTERVAL)
+
 def main(force_mode: bool = False):
     global AUCTION_END_TIME, highest_bids, last_rewards, event_scanner_failed
     global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold
@@ -1151,6 +1190,9 @@ def main(force_mode: bool = False):
 
     trigger_thread = threading.Thread(target=final_window_trigger_thread, daemon=True)
     trigger_thread.start()
+
+    reward_thread = threading.Thread(target=periodic_reward_fetch_thread, daemon=True)
+    reward_thread.start()
 
     # --- Dynamic Average Block Time Estimation ---
     BLOCK_TIME_ESTIMATION_SECONDS = 15
@@ -1635,21 +1677,6 @@ def main(force_mode: bool = False):
                             last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
                     last_reward_check_time = now_timestamp_utc
                                                             
-                is_early_bid_fetch_time = (early_bid_times_queue and 
-                                        (early_bid_times_queue[0] - EARLY_BID_REWARD_FETCH_INTERVAL - 2 < time_to_auction_end <= early_bid_times_queue[0] + 5))
-                can_do_periodic_fetch = (time_to_auction_end > MIN_TTE_FOR_GENERAL_REWARD_FETCH and not is_early_bid_fetch_time and (now_timestamp_utc - last_reward_check_time >= PERIODIC_REWARD_FETCH_INTERVAL))
-
-                if can_do_periodic_fetch:
-                    logger.info(f"Periodic reward fetch (TTE: {time_to_auction_end:.2f}s)")
-                    rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
-                    for r_info in rewards_data:
-                        if "error" not in r_info and r_info.get("pool_id"):
-                            last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
-                    last_reward_check_time = now_timestamp_utc
-                elif time_to_auction_end <= MIN_TTE_FOR_GENERAL_REWARD_FETCH:
-                    logger.debug(f"Skipping general periodic reward fetch: TTE {time_to_auction_end:.2f}s <= MIN_TTE_FOR_GENERAL_REWARD_FETCH ({MIN_TTE_FOR_GENERAL_REWARD_FETCH}s).")
-                elif is_early_bid_fetch_time:
-                    logger.debug(f"Skipping general periodic reward fetch: Early bid window is active/imminent.")
             else: # This else is for 'if not final_bid_window_active:'
                 logger.debug(f"Final bidding window is active (TTE: {time_to_auction_end:.2f}s). Skipping regular updates and early bids.")
                 

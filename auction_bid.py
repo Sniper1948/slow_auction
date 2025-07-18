@@ -1323,11 +1323,7 @@ def main(force_mode: bool = False):
                 reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
                 continue    
 
-            logger.debug(
-                f"TTE DEBUG: AUCTION_END_TIME={AUCTION_END_TIME:.4f} ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat()}), "
-                f"NOW_UTC={now_timestamp_utc:.4f} ({now_datetime_utc.isoformat()}), "
-                f"CALCULATED TTE = {time_to_auction_end:.2f}s"
-            )
+            logger.info(f"TTE: {time_to_auction_end:.4f}s")
 
             final_bid_window_active = (0 < time_to_auction_end <= FINAL_BID_WINDOW_START_TTE) or \
                                       (force_mode and 0 < time_to_auction_end)      
@@ -1620,13 +1616,6 @@ def main(force_mode: bool = False):
                         early_bid_times_queue.pop(0)
                         logger.info(f"Processed early bid threshold {current_threshold}s. Remaining queue: {early_bid_times_queue}")
 
-                elif SIMULATE_FINAL_WINDOW_MODE and early_bid_times_queue and \
-                     0 < time_to_auction_end <= early_bid_times_queue[0] and \
-                     not early_bids_processed_for_threshold.get(early_bid_times_queue[0], False):
-                    # This log ensures we know why early bids didn't run if it was due to simulation mode
-                    # and the TTE would have otherwise triggered it.
-                    logger.debug(f"[SIMULATION] Skipping early bids processing block due to SIMULATE_FINAL_WINDOW_MODE active (Simulated TTE: {time_to_auction_end:.2f}s would have met threshold {early_bid_times_queue[0]}s).")
-
                 if not hot_list_created and HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE:
                     # Note: time_to_auction_end here will be the simulated TTE if SIMULATE_FINAL_WINDOW_MODE is True.
                     # Hotlist creation might behave unexpectedly if SIMULATE_TTE_START is within its window.
@@ -1777,6 +1766,7 @@ def main(force_mode: bool = False):
                 time.sleep(60)
         except ContractLogicError as e_cl_main: logger.error(f"Main Loop ContractLogicError: {e_cl_main}"); time.sleep(3)
         except Exception as e_unhandled_main: logger.exception(f"Unhandled Main Loop Error: {e_unhandled_main}"); time.sleep(5)
+        time.sleep(0.01)
 
 if __name__ == "__main__":
     try:

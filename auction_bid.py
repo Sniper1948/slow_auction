@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from threading import Lock
 
 # Script version
-SCRIPT_VERSION = "1.6.3" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.0" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -163,8 +163,10 @@ TTE_THRESHOLD_BID_UPDATE = 1.8    # Skip bid updates if TTE < 1.8s
 TTE_THRESHOLD_EVENT_SCAN = 2.0    # Skip event scanning if TTE < 2.0s
 # Note: Periodic Reward Fetch is already governed by MIN_TTE_FOR_GENERAL_REWARD_FETCH = 45s
 
+final_window_is_active = False
+
 # --- Simulation Mode Parameters ---
-SIMULATE_FINAL_WINDOW_MODE = False  # Set to True to activate simulation
+SIMULATE_FINAL_WINDOW_MODE = True  # Set to True to activate simulation
 SIMULATE_TTE_START = 20.0          # TTE (seconds) at which simulation will begin
 simulated_auction_end_time_override: Optional[float] = None # Internal state for simulation TTE
 simulation_has_run: bool = False # Ensures simulation runs only once if desired
@@ -402,29 +404,10 @@ def initialize_bids_state(w3: Web3, sf_contract: Contract):
     logger.debug(f"Initialized highest_bids: {len(highest_bids)} entries.")
 
 def update_bids_from_chain(w3: Web3, sf_contract: Contract, pools_to_check: Dict[str, str]):
-    pool_count = len(pools_to_check)
-    logger.debug(f"Updating bids from chain for {pool_count} pool(s)...")
-    
-    checked_count = 0
-    for pid, pname in pools_to_check.items():
-        if pool_count > 10 and checked_count > 0 and checked_count % 5 == 0: 
-            time.sleep(0.05) 
-            
-        user, bid_amt = get_current_bid(w3, sf_contract, pid, timeout=0.4) 
-        current_local = highest_bids.get(pid, {"amount": 0.0, "user": "NO BIDDER"})
-        
-        bid_changed = False
-        if abs(bid_amt - current_local["amount"]) > 1e-9: 
-            bid_changed = True
-        elif bid_amt > 0 and user != current_local["user"]: 
-            bid_changed = True
-        elif bid_amt == 0 and current_local["amount"] > 0: 
-            bid_changed = True
-
-        if bid_changed:
-            highest_bids[pid] = {"amount": bid_amt, "user": user, "tx_hash": "on-chain-update" if bid_amt > 0 else None}
-            logger.info(f"Updated bid for {pname} ({pid[:6]}..): {bid_amt:.4f} $AG by {user if user != 'NO BIDDER' else 'N/A'}" if bid_amt > 0 else f"Cleared/No bid for {pname} ({pid[:6]}..)")
-        checked_count += 1
+    # This function is too slow and will be replaced with a multicall implementation.
+    # For now, we will just log a message and return.
+    logger.info("Bypassing `update_bids_from_chain` to prevent blocking.")
+    return
 
 
 def fetch_pool_rewards_data(sf_contract: Contract) -> List[Dict[str, Any]]:
@@ -1168,6 +1151,17 @@ w3_instance = connect_to_blockchain(SONIC_RPC_URLS)
 silver_fees_contract_instance = w3_instance.eth.contract(address=SILVER_FEES_CONTRACT_ADDRESS, abi=SILVER_FEES_ABI)
 pool_bidder_contract_instance = w3_instance.eth.contract(address=POOL_BIDDER_CONTRACT_ADDRESS, abi=POOL_BIDDER_ABI)
 
+def final_window_trigger_thread():
+    global final_window_is_active, AUCTION_END_TIME, FINAL_BID_WINDOW_START_TTE
+    while True:
+        if AUCTION_END_TIME is not None:
+            time_to_auction_end = AUCTION_END_TIME - time.time()
+            if 0 < time_to_auction_end <= FINAL_BID_WINDOW_START_TTE:
+                final_window_is_active = True
+                logger.info("Final bidding window triggered by thread.")
+                break
+        time.sleep(0.01)
+
 def main(force_mode: bool = False):
     global AUCTION_END_TIME, highest_bids, last_rewards, event_scanner_failed
     global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold
@@ -1177,6 +1171,9 @@ def main(force_mode: bool = False):
 
     if not POOLS_ORIGINAL: POOLS_ORIGINAL.update(POOLS); 
     if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()} 
+
+    trigger_thread = threading.Thread(target=final_window_trigger_thread, daemon=True)
+    trigger_thread.start()
 
     # --- Dynamic Average Block Time Estimation ---
     BLOCK_TIME_ESTIMATION_SECONDS = 15
@@ -1325,10 +1322,7 @@ def main(force_mode: bool = False):
 
             logger.info(f"TTE: {time_to_auction_end:.4f}s")
 
-            final_bid_window_active = (0 < time_to_auction_end <= FINAL_BID_WINDOW_START_TTE) or \
-                                      (force_mode and 0 < time_to_auction_end)      
-            
-            if final_bid_window_active:
+            if final_window_is_active:
                 logger.info(f"Entering Final Bidding Phase (TTE: {time_to_auction_end:.2f}s). Monitored Pools: {list(POOLS.keys())}")
                 
                 pools_for_initial_batch_ids: List[str] = []

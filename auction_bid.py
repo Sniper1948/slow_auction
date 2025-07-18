@@ -1266,13 +1266,13 @@ def main(force_mode: bool = False):
             if SIMULATE_FINAL_WINDOW_MODE:
                 if not simulation_has_run: # Only set up and run the simulation once per script execution
                     if simulated_auction_end_time_override is None: # Initial setup for the single run
-                logger.info("Fetching rewards before starting simulation...")
-                rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
-                for r_info in rewards_data:
-                    if "error" not in r_info and r_info.get("pool_id"):
-                        last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
-                last_reward_check_time = now_timestamp_utc
-                logger.info("Rewards fetched.")
+                        logger.info("Fetching rewards before starting simulation...")
+                        rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
+                        for r_info in rewards_data:
+                            if "error" not in r_info and r_info.get("pool_id"):
+                                last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
+                        last_reward_check_time = now_timestamp_utc
+                        logger.info("Rewards fetched.")
                         simulated_auction_end_time_override = now_timestamp_utc + SIMULATE_TTE_START
                         simulation_has_run = True # Mark that we are doing/have done the one simulation run
                         logger.info(f"[SIMULATION] Starting ONE-TIME simulated TTE. Fake end time set to: {datetime.datetime.fromtimestamp(simulated_auction_end_time_override, tz=datetime.timezone.utc).isoformat()}")

@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from threading import Lock
 
 # Script version
-SCRIPT_VERSION = "1.6.0" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.5" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -1540,7 +1540,7 @@ def main(force_mode: bool = False):
                 except Exception as e: logger.error(f"PoolBidder $AG balance check failed: {e}")
                 last_pb_bal_check_time = now_timestamp_utc
 
-            if not final_bid_window_active: 
+            if not final_window_is_active:
                 bid_upd_interval = 0.5 if time_to_auction_end <= 60 else 3.5
                 if time_to_auction_end > TTE_THRESHOLD_BID_UPDATE and \
                    (now_timestamp_utc - last_bid_update_time >= bid_upd_interval):

@@ -1544,7 +1544,16 @@ def main(force_mode: bool = False):
                     # Hotlist creation might behave unexpectedly if SIMULATE_TTE_START is within its window.
                     # For robust simulation of just the final window, ensure SIMULATE_TTE_START is below HOT_LIST_CREATION_END_TTE (25s).
                     # Current SIMULATE_TTE_START = 20.0s, so this is fine.
-                    logger.info(f"Creating Hot List (TTE: {time_to_auction_end:.2f}s). Using cached rewards only.")
+                    logger.info(f"Creating Hot List (TTE: {time_to_auction_end:.2f}s).")
+
+                    logger.info("Fetching rewards for hot list creation...")
+                    rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
+                    for r_info in rewards_data:
+                        if "error" not in r_info and r_info.get("pool_id"):
+                            last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
+                    last_reward_check_time = now_timestamp_utc
+                    logger.info("Rewards fetched for hot list creation.")
+
                     temp_hot_pools = {}
                     for pid, pname in POOLS_ORIGINAL.items():
                         reward = last_rewards.get(pid)
@@ -1568,14 +1577,6 @@ def main(force_mode: bool = False):
                             pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
                     hot_list_created = True
                     log_auction_state_to_file() # Log state after hotlist determination
-
-                if hot_list_created and 45 < time_to_auction_end <= 50:
-                    logger.info(f"Refreshing rewards for hot list pools (TTE: {time_to_auction_end:.2f}s)")
-                    rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
-                    for r_info in rewards_data:
-                        if "error" not in r_info and r_info.get("pool_id") in POOLS:
-                            last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
-                    last_reward_check_time = now_timestamp_utc
                                                             
             else: # This else is for 'if not final_bid_window_active:'
                 logger.debug(f"Final bidding window is active (TTE: {time_to_auction_end:.2f}s). Skipping regular updates and early bids.")

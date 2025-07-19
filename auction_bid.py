@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from threading import Lock
 
 # Script version
-SCRIPT_VERSION = "1.6.5" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.6" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -385,9 +385,7 @@ def initialize_bids_state(w3: Web3, sf_contract: Contract):
     logger.info("Initializing highest_bids and pool_locks from on-chain data.")
     pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()}
     for pid, pname in POOLS_ORIGINAL.items():
-        user, bid_amt = get_current_bid(w3, sf_contract, pid)
-        highest_bids[pid] = {"amount": bid_amt, "user": user, "tx_hash": "on-chain-init" if bid_amt > 0 else None}
-        if bid_amt > 0: logger.info(f"Init bid for {pname}: {bid_amt:.4f} $AG by {user}")
+        highest_bids[pid] = {"amount": 0.0, "user": "NO BIDDER", "tx_hash": None}
     logger.debug(f"Initialized highest_bids: {len(highest_bids)} entries.")
 
 def update_bids_from_chain(w3: Web3, sf_contract: Contract, pools_to_check: Dict[str, str]):

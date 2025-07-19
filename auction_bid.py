@@ -1290,41 +1290,6 @@ def main(force_mode: bool = False):
             if SIMULATE_FINAL_WINDOW_MODE:
                 if not simulation_has_run: # Only set up and run the simulation once per script execution
                     if simulated_auction_end_time_override is None: # Initial setup for the single run
-                        logger.info("Setting up simulation environment...")
-
-                        logger.info("Fetching rewards for simulation...")
-                        rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
-                        for r_info in rewards_data:
-                            if "error" not in r_info and r_info.get("pool_id"):
-                                last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
-                        last_reward_check_time = now_timestamp_utc
-                        logger.info("Rewards fetched for simulation.")
-
-                        logger.info("Creating Hot List for simulation...")
-                        temp_hot_pools = {}
-                        for pid, pname in POOLS_ORIGINAL.items():
-                            reward = last_rewards.get(pid)
-                            if reward is None:
-                                logger.debug(f"HotList: Skipping {pname}, no cached reward.")
-                                continue
-                            cb = highest_bids.get(pid, {}).get("amount", 0.0)
-                            hypothetical_next_bid_val = cb + CONTRACT_DEFAULT_INCREMENT_AMOUNT if cb > 0 else CONTRACT_DEFAULT_INCREMENT_AMOUNT
-                            if reward > hypothetical_next_bid_val + HOT_LIST_MIN_POTENTIAL_PROFIT:
-                                temp_hot_pools[pid] = pname
-                                logger.info(f"HotList ADD: {pname} (R:{reward:.3f} C:{cb:.3f} ProfitPostContractBid:{(reward - hypothetical_next_bid_val):.3f})")
-
-                        if temp_hot_pools:
-                            POOLS.clear(); POOLS.update(temp_hot_pools)
-                            pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
-                            logger.info(f"Hot List ACTIVE with {len(POOLS)} pools: {list(POOLS.values())}")
-                        else:
-                            logger.warning("No pools qualified for Hot List. Final bidding will consider all original pools.")
-                            if not POOLS:
-                                POOLS.update(POOLS_ORIGINAL)
-                                pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
-                        hot_list_created = True
-                        log_auction_state_to_file()
-
                         simulated_auction_end_time_override = now_timestamp_utc + SIMULATE_TTE_START
                         simulation_has_run = True # Mark that we are doing/have done the one simulation run
                         logger.info(f"[SIMULATION] Starting ONE-TIME simulated TTE. Fake end time set to: {datetime.datetime.fromtimestamp(simulated_auction_end_time_override, tz=datetime.timezone.utc).isoformat()}")
@@ -1591,7 +1556,7 @@ def main(force_mode: bool = False):
                         early_bid_times_queue.pop(0)
                         logger.info(f"Processed early bid threshold {current_threshold}s. Remaining queue: {early_bid_times_queue}")
 
-                if not hot_list_created and HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE and not SIMULATE_FINAL_WINDOW_MODE:
+                if not hot_list_created and HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE:
                     # Note: time_to_auction_end here will be the simulated TTE if SIMULATE_FINAL_WINDOW_MODE is True.
                     # Hotlist creation might behave unexpectedly if SIMULATE_TTE_START is within its window.
                     # For robust simulation of just the final window, ensure SIMULATE_TTE_START is below HOT_LIST_CREATION_END_TTE (25s).

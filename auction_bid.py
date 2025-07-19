@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from threading import Lock
 
 # Script version
-SCRIPT_VERSION = "1.6.6" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.7" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -375,10 +375,23 @@ def connect_to_blockchain(rpc_urls: List[str]) -> Web3:
     raise ConnectionError("No valid RPC available after multiple attempts.")
 
 def get_current_bid(w3: Web3, sf_contract: Contract, pool_id: str, timeout: float = 1.0) -> Tuple[str, float]:
-    # This function is too slow and will be replaced with a multicall implementation.
-    # For now, we will just log a message and return a dummy value.
-    logger.info("Bypassing `get_current_bid` to prevent blocking.")
-    return "NO BIDDER", 0.0
+    pool_name = POOLS_ORIGINAL.get(pool_id, pool_id)
+    try:
+        data = sf_contract.functions.snatchData(pool_id).call()
+        if not data or data[0][0] == '0x0000000000000000000000000000000000000000':
+            return "NO BIDDER", 0.0
+        user, bid_wei = Web3.to_checksum_address(data[0][0]), int(data[0][1])
+        bid_eth = float(w3.from_wei(bid_wei, 'ether'))
+        return user, bid_eth
+    except ContractLogicError as e:
+        logger.error(f"snatchData ContractLogicError for {pool_name} ({pool_id}): {e}")
+        return "NO BIDDER", 0.0
+    except Exception as e:
+        if "timeout" not in str(e).lower() and "connection aborted" not in str(e).lower() :
+            logger.error(f"Generic error in get_current_bid for {pool_name} ({pool_id}): {e}", exc_info=False)
+        else:
+            logger.debug(f"Timeout/Connection error in get_current_bid for {pool_name} ({pool_id}): {e}")
+        return "NO BIDDER", 0.0
 
 def initialize_bids_state(w3: Web3, sf_contract: Contract):
     global highest_bids, pool_locks
@@ -1163,6 +1176,16 @@ def periodic_reward_fetch_thread():
             logger.info("Periodic reward fetch thread finished.")
         time.sleep(PERIODIC_REWARD_FETCH_INTERVAL)
 
+def periodic_bid_update_thread():
+    global w3_instance, silver_fees_contract_instance, POOLS, hot_list_created, POOLS_ORIGINAL
+    while True:
+        if not final_window_is_active:
+            logger.info("Periodic bid update thread updating bids...")
+            pools_for_update = POOLS if hot_list_created and POOLS else POOLS_ORIGINAL
+            update_bids_from_chain(w3_instance, silver_fees_contract_instance, pools_for_update)
+            logger.info("Periodic bid update thread finished.")
+        time.sleep(3.5)
+
 def main(force_mode: bool = False):
     global AUCTION_END_TIME, highest_bids, last_rewards, event_scanner_failed
     global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold
@@ -1175,6 +1198,9 @@ def main(force_mode: bool = False):
 
     trigger_thread = threading.Thread(target=final_window_trigger_thread, daemon=True)
     trigger_thread.start()
+
+    bid_update_thread = threading.Thread(target=periodic_bid_update_thread, daemon=True)
+    bid_update_thread.start()
 
     # --- Dynamic Average Block Time Estimation ---
     BLOCK_TIME_ESTIMATION_SECONDS = 15
@@ -1468,13 +1494,6 @@ def main(force_mode: bool = False):
                 last_pb_bal_check_time = now_timestamp_utc
 
             if not final_window_is_active:
-                bid_upd_interval = 0.5 if time_to_auction_end <= 60 else 3.5
-                if time_to_auction_end > TTE_THRESHOLD_BID_UPDATE and \
-                   (now_timestamp_utc - last_bid_update_time >= bid_upd_interval):
-                    pools_for_update = POOLS if hot_list_created and POOLS else POOLS_ORIGINAL
-                    logger.info(f"Bid update interval reached. Updating {len(pools_for_update)} pools.")
-                    update_bids_from_chain(w3_instance, silver_fees_contract_instance, pools_for_update)
-                    last_bid_update_time = now_timestamp_utc
                 
                 # Determine if early bids should be processed (not in simulation and conditions met)
                 should_process_early_bids = (

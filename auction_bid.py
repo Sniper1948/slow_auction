@@ -174,13 +174,6 @@ MAX_BLOCKS_PER_SCAN_LOW_TTE = 100    # Max blocks to scan in one go if TTE is lo
 TTE_FOR_REDUCED_SCAN_RANGE = 30.0  # TTE below which scan range is reduced
 MAX_INITIAL_CATCHUP_SCAN_BLOCKS = 2000 # Max blocks for the very first catch-up scan in a cycle
 
-# --- Dumb Bidding Mode Parameters ---
-#DUMB_BIDDING_MODE: bool = os.getenv('DUMB_BIDDING_MODE', 'False').lower() == 'true'
-DUMB_BIDDING_MODE = True
-DUMB_BID_REPEATS: int = int(os.getenv('DUMB_BID_REPEATS', '3'))
-DUMB_BID_REPEAT_DELAY: float = float(os.getenv('DUMB_BID_REPEAT_DELAY', '0.1'))
-DUMB_BID_PROFIT_MARGIN_ASSUMPTION: float = float(os.getenv('DUMB_BID_PROFIT_MARGIN_ASSUMPTION', '0.01'))
-MINIMUM_TTE_FOR_DUMB_BID: float = float(os.getenv('MINIMUM_TTE_FOR_DUMB_BID', '0.05'))
 
 
 MIN_TTE_FOR_GENERAL_REWARD_FETCH = 45 # No general reward HTTP calls if TTE < 45s
@@ -1320,6 +1313,18 @@ def main(force_mode: bool = False):
                 bid_log_data.clear()
                 logger.info("Bid log for the completed cycle has been cleared. Reward summary is cumulative.")
                 
+                # Post-auction catch-up scan
+                if event_scanner:
+                    logger.info("Performing post-auction catch-up event scan...")
+                    try:
+                        from_block = event_scan_state.get_last_scanned_block() + 1
+                        to_block = w3_instance.eth.block_number
+                        if from_block <= to_block:
+                            event_scanner.scan(start_bn=from_block, end_bn=to_block, timeout=30)
+                        logger.info("Post-auction catch-up scan complete.")
+                    except Exception as e:
+                        logger.error(f"Post-auction catch-up scan failed: {e}")
+
                 reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
                 continue    
 
@@ -1399,146 +1404,47 @@ def main(force_mode: bool = False):
                     else:
                         logger.error(f"Initial Final MULTI-BID FAILED. Details: {batch_tx_hash if batch_tx_hash else 'No tx_hash / Pre-flight fail'}")
                 
-                # --- DUMB BIDDING MODE or HYPER-REACTIVE ---
-                if DUMB_BIDDING_MODE and batch_success and initial_batch_optimistic_bids:
-                    logger.info(f"DUMB_BIDDING_MODE active. Repeating bids up to {DUMB_BID_REPEATS} times.")
-                    current_dumb_bid_targets = dict(initial_batch_optimistic_bids)
+                # --- DUMB BIDDING MODE ---
+                if batch_success and initial_batch_optimistic_bids:
+                    logger.info(f"Initial bid successful, proceeding with dumb bid.")
 
-                    for i_dumb_repeat in range(DUMB_BID_REPEATS):
-                        time.sleep(DUMB_BID_REPEAT_DELAY)
-                        current_tte_dumb = AUCTION_END_TIME - time.time()
+                    # Wait for a short period to allow the initial bid to be potentially outbid
+                    time.sleep(0.3)
 
-                        if current_tte_dumb <= MINIMUM_TTE_FOR_DUMB_BID:
-                            logger.info(f"Dumb Bid Repeat {i_dumb_repeat+1}: TTE {current_tte_dumb:.3f}s too low (<= {MINIMUM_TTE_FOR_DUMB_BID}s), stopping dumb bids.")
-                            break
-                        
-                        logger.info(f"--- Dumb Bid Repeat Attempt {i_dumb_repeat+1}/{DUMB_BID_REPEATS} (TTE: {current_tte_dumb:.3f}s) ---")
-                        pools_for_this_dumb_repeat: List[str] = []
-                        amounts_for_this_dumb_repeat: List[float] = [] # Will be 0.0s
-                        next_iteration_optimistic_targets: Dict[str, float] = {}
+                    pools_for_dumb_bid: List[str] = []
+                    amounts_for_dumb_bid: List[float] = []
 
-                        if not current_dumb_bid_targets:
-                            logger.info(f"Dumb Bid Repeat {i_dumb_repeat+1}: No targets left from previous iteration. Stopping.")
-                            break
+                    for p_id, p_name in POOLS.items():
+                        if p_id in initial_batch_optimistic_bids:
+                            reward = last_rewards.get(p_id)
+                            if reward is None:
+                                logger.warning(f"No cached reward for {p_name} in dumb bid, skipping.")
+                                continue
 
-                        for p_id_dumb, last_aimed_bid_dumb in current_dumb_bid_targets.items():
-                            # Assumption: opponent outbid our last_aimed_bid_dumb by one increment
-                            assumed_opponent_bid_dumb = round(last_aimed_bid_dumb + CONTRACT_DEFAULT_INCREMENT_AMOUNT, 8)
-                            # Our contract will then aim to bid one increment over that
-                            my_next_target_if_dumb_bidding = round(assumed_opponent_bid_dumb + CONTRACT_DEFAULT_INCREMENT_AMOUNT, 8)
+                            # Assume we were outbid by 0.1
+                            assumed_opponent_bid = initial_batch_optimistic_bids[p_id] + 0.1
                             
-                            reward_dumb = last_rewards.get(p_id_dumb)
+                            # Our next bid would be 0.1 over that
+                            dumb_bid_amount = assumed_opponent_bid + 0.1
 
-                            if reward_dumb is not None and reward_dumb > my_next_target_if_dumb_bidding + DUMB_BID_PROFIT_MARGIN_ASSUMPTION:
-                                logger.info(f"  Dumb Repeat {i_dumb_repeat+1} for {POOLS_ORIGINAL.get(p_id_dumb, p_id_dumb)}: Profitable to aim for ~{my_next_target_if_dumb_bidding:.4f}. (Last Aim: {last_aimed_bid_dumb:.4f}, Assumed Opponent: {assumed_opponent_bid_dumb:.4f}, Reward: {reward_dumb:.4f})")
-                                pools_for_this_dumb_repeat.append(p_id_dumb)
-                                amounts_for_this_dumb_repeat.append(0.0) # Send 0.0 for contract to auto-increment
-                                next_iteration_optimistic_targets[p_id_dumb] = my_next_target_if_dumb_bidding
+                            if reward > dumb_bid_amount + FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN:
+                                logger.info(f"Dumb Bid Add: {p_name}. Profitable for dumb bid (R:{reward:.3f} DumbBid:{dumb_bid_amount:.3f})")
+                                pools_for_dumb_bid.append(p_id)
+                                amounts_for_dumb_bid.append(0.0) # Auto-increment
                             else:
-                                logger.info(f"  Dumb Repeat {i_dumb_repeat+1} for {POOLS_ORIGINAL.get(p_id_dumb, p_id_dumb)}: SKIPPING. Not profitable or no reward. Next Target: {my_next_target_if_dumb_bidding:.4f}, Reward: {reward_dumb}")
-                        
-                        if not pools_for_this_dumb_repeat:
-                            logger.info(f"Dumb Bid Repeat {i_dumb_repeat+1}: No pools left that are profitable for a dumb repeat bid. Stopping.")
-                            break
+                                logger.debug(f"Skipping {p_name} from dumb bid: Reward {reward:.3f} not sufficient for dumb bid {dumb_bid_amount:.3f}")
 
-                        dumb_repeat_batch_success, dumb_repeat_tx_hash = place_multiple_bids_with_poolbidder(
+                    if pools_for_dumb_bid:
+                        logger.info(f"Attempting dumb MULTI-BID for {len(pools_for_dumb_bid)} pools. Urgency: URGENT")
+                        dumb_batch_success, dumb_batch_tx_hash = place_multiple_bids_with_poolbidder(
                             w3_instance, pool_bidder_contract_instance,
-                            pools_for_this_dumb_repeat, amounts_for_this_dumb_repeat, # Sending 0.0s
+                            pools_for_dumb_bid, amounts_for_dumb_bid,
                             urgency="URGENT"
                         )
-
-                        if dumb_repeat_batch_success and dumb_repeat_tx_hash:
-                            logger.info(f"Dumb Bid Repeat {i_dumb_repeat+1} SUCCEEDED. Tx: {dumb_repeat_tx_hash}")
-                            current_dumb_bid_targets = dict(next_iteration_optimistic_targets) # Update targets for the next dumb repeat
-                            for p_id_succeeded_dumb, new_amount_dumb in next_iteration_optimistic_targets.items():
-                                highest_bids[p_id_succeeded_dumb] = {
-                                    "amount": new_amount_dumb,
-                                    "user": POOL_BIDDER_CONTRACT_ADDRESS,
-                                    "tx_hash": dumb_repeat_tx_hash
-                                }
+                        if dumb_batch_success and dumb_batch_tx_hash:
+                            logger.info(f"Dumb MULTI-BID SUBMITTED. Tx: {dumb_batch_tx_hash}")
                         else:
-                            logger.error(f"Dumb Bid Repeat {i_dumb_repeat+1} FAILED. Tx/Error: {dumb_repeat_tx_hash if dumb_repeat_tx_hash else 'Pre-flight fail'}. Stopping dumb bids.")
-                            break # Stop dumb bidding if a batch fails
-                    logger.info("--- Finished Dumb Bidding Mode sequence ---")
-
-                elif not DUMB_BIDDING_MODE and batch_success and initial_batch_optimistic_bids:
-                    # Populate my_reactive_bids only if not in dumb mode and initial batch was successful
-                    my_reactive_bids = dict(initial_batch_optimistic_bids)
-                    logger.info(f"Entering HYPER-REACTIVE mode for pools: {[POOLS_ORIGINAL.get(p, p) for p in my_reactive_bids.keys()]}")
-                    
-                    # --- EXISTING HYPER-REACTIVE LOOP (indented under this 'elif') ---
-                    while True:
-                        now_ts_in_hyper_loop = datetime.datetime.now(datetime.timezone.utc).timestamp()
-                        current_tte_hyper = AUCTION_END_TIME - now_ts_in_hyper_loop
-                        
-                        if current_tte_hyper <= MINIMUM_TTE_FOR_REACTION:
-                            logger.info(f"Exiting HYPER-REACTIVE mode: TTE {current_tte_hyper:.3f}s <= {MINIMUM_TTE_FOR_REACTION}s")
-                            break
-                        
-                        if not my_reactive_bids: 
-                            logger.info("Exiting HYPER-REACTIVE mode: No more pools to watch.")
-                            break
-
-                        for p_id_hyper in list(my_reactive_bids.keys()): 
-                            current_tte_for_pool_check = AUCTION_END_TIME - datetime.datetime.now(datetime.timezone.utc).timestamp()
-                            if current_tte_for_pool_check <= MINIMUM_TTE_FOR_REACTION:
-                                continue 
-
-                            current_bidder_onchain_hyper, onchain_bid_amount_hyper = get_current_bid(
-                                w3_instance, silver_fees_contract_instance, p_id_hyper, timeout=GET_CURRENT_BID_TIMEOUT_HYPER
-                            )
-                            my_last_intended_bid_for_pool = my_reactive_bids.get(p_id_hyper, 0.0)
-
-                            is_outbid = False
-                            if current_bidder_onchain_hyper != POOL_BIDDER_CONTRACT_ADDRESS:
-                                if onchain_bid_amount_hyper >= my_last_intended_bid_for_pool - 1e-9: 
-                                    is_outbid = True
-                            elif onchain_bid_amount_hyper > my_last_intended_bid_for_pool + 1e-9: 
-                                is_outbid = True 
-                            
-                            if is_outbid:
-                                reward_hyper = last_rewards.get(p_id_hyper)
-                                if reward_hyper is not None:
-                                    next_bid_target = round(onchain_bid_amount_hyper + CONTRACT_DEFAULT_INCREMENT_AMOUNT, 8)
-                                    
-                                    is_profitable_to_counter = reward_hyper > next_bid_target + FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN
-                                    
-                                    should_attempt_reactive_bid = False
-                                    if current_bidder_onchain_hyper != POOL_BIDDER_CONTRACT_ADDRESS: 
-                                        should_attempt_reactive_bid = True
-                                    elif next_bid_target > my_last_intended_bid_for_pool + 1e-9: 
-                                        should_attempt_reactive_bid = True
-
-                                    if is_profitable_to_counter and should_attempt_reactive_bid :
-                                        logger.info(f"Hyper-Reactive: Condition met for {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}. Onchain: {onchain_bid_amount_hyper:.4f} by {current_bidder_onchain_hyper}. MyLastIntended: {my_last_intended_bid_for_pool:.4f}. Countering for ~{next_bid_target:.4f}. TTE: {current_tte_hyper:.3f}s")
-                                        bid_success_reactive, tx_hash_reactive = place_bid_with_poolbidder(
-                                            w3_instance, pool_bidder_contract_instance, 0.0, p_id_hyper, "URGENT"
-                                        )
-                                        if bid_success_reactive:
-                                            my_reactive_bids[p_id_hyper] = next_bid_target 
-                                            highest_bids[p_id_hyper] = { 
-                                                "amount": next_bid_target,
-                                                "user": POOL_BIDDER_CONTRACT_ADDRESS,
-                                                "tx_hash": tx_hash_reactive 
-                                            }
-                                    elif not is_profitable_to_counter:
-                                        logger.debug(f"Hyper-Reactive: Skipping {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}, not profitable. Reward: {reward_hyper:.4f}, Next Target: {next_bid_target:.4f}")
-                                    else: 
-                                        logger.debug(f"Hyper-Reactive: We are likely leading {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)} and new target {next_bid_target:.4f} isn't a necessary increase over last intended {my_last_intended_bid_for_pool:.4f}, or current onchain {onchain_bid_amount_hyper:.4f} is already good.")
-                                        if current_bidder_onchain_hyper == POOL_BIDDER_CONTRACT_ADDRESS and onchain_bid_amount_hyper > my_last_intended_bid_for_pool:
-                                            my_reactive_bids[p_id_hyper] = onchain_bid_amount_hyper
-                                else: 
-                                    logger.warning(f"Hyper-Reactive: No reward data for {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}, cannot counter bid.")
-                            elif current_bidder_onchain_hyper == POOL_BIDDER_CONTRACT_ADDRESS and onchain_bid_amount_hyper > my_last_intended_bid_for_pool + 1e-9:
-                                my_reactive_bids[p_id_hyper] = onchain_bid_amount_hyper
-                                logger.debug(f"Hyper-Reactive: Confirmed our lead on {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)} with updated amount {onchain_bid_amount_hyper:.4f}")
-                            
-                            if len(my_reactive_bids) > 1: time.sleep(0.001) 
-
-                        time.sleep(HYPER_REACTIVE_CHECK_INTERVAL) 
-                    logger.info("Exited HYPER-REACTIVE mode.")
-                else: 
-                    logger.info("No pools identified for initial final batch bid, or initial batch failed/no pools to watch. Skipping hyper-reactive mode.")
+                            logger.error(f"Dumb MULTI-BID FAILED. Details: {dumb_batch_tx_hash if dumb_batch_tx_hash else 'No tx_hash / Pre-flight fail'}")
 
             if time_to_auction_end > TTE_THRESHOLD_BALANCE_CHECK and \
                (now_timestamp_utc - last_pb_bal_check_time >= 600):
@@ -1550,7 +1456,7 @@ def main(force_mode: bool = False):
                 except Exception as e: logger.error(f"PoolBidder $AG balance check failed: {e}")
                 last_pb_bal_check_time = now_timestamp_utc
 
-            if not final_bid_window_active: 
+            if not final_bid_window_active and not hot_list_created:
                 bid_upd_interval = 0.5 if time_to_auction_end <= 60 else 3.5
                 if time_to_auction_end > TTE_THRESHOLD_BID_UPDATE and \
                    (now_timestamp_utc - last_bid_update_time >= bid_upd_interval):
@@ -1677,7 +1583,7 @@ def main(force_mode: bool = False):
                 
             # --- Periodic SnatchAuction Event Scanning ---
             EVENT_SCAN_INTERVAL = 20 
-            if time_to_auction_end > TTE_THRESHOLD_EVENT_SCAN and \
+            if time_to_auction_end > TTE_THRESHOLD_EVENT_SCAN and not hot_list_created and \
                event_scanner and (now_timestamp_utc - last_evt_scan_time >= EVENT_SCAN_INTERVAL):
                 try:
                     current_from_block = 0

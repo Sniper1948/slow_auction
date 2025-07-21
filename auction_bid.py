@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from threading import Lock
 
 # Script version
-SCRIPT_VERSION = "1.6.7" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.0" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -128,7 +128,7 @@ event_scanner_failed: bool = False
 POOLS_ORIGINAL: Dict[str, str] = {} # Populated at startup
 hot_list_created: bool = False
 last_bids: Dict[str, float] = {} # Tracks last attempted bid amount for a pool if it failed low
-EARLY_BID_TIMES_CONFIG = sorted([13000, 8008, 6008, 808, 308], reverse=True) # Original config
+EARLY_BID_TIMES_CONFIG = sorted([808, 308], reverse=True) # Original config
 early_bid_times_queue: List[int] = [] # Mutable queue for current auction cycle
 early_bids_processed_for_threshold: Dict[int, bool] = {} # Tracks if a threshold time has been processed
 last_reward_check_time: float = 0
@@ -145,8 +145,8 @@ EARLY_BID_MAX_REWARD_FOR_0_1_AG_BID = 0.2
 EARLY_BID_FIXED_AMOUNT = 0.1
 CONTRACT_DEFAULT_INCREMENT_AMOUNT = 0.1 # Standard increment your contract uses when bid amount 0 is passed
 
-HOT_LIST_CREATION_START_TTE = 300  # Start creating hot list 5 minutes before end
-HOT_LIST_CREATION_END_TTE = 280    # Aim to have it done by 4m 40s before end
+HOT_LIST_CREATION_START_TTE = 45  # Start creating hot list 45s before end
+HOT_LIST_CREATION_END_TTE = 25    # Aim to have it done by 25s before end
 HOT_LIST_MIN_POTENTIAL_PROFIT = 0.01 # Reward > (current_bid + CONTRACT_DEFAULT_INCREMENT_AMOUNT) + THIS
 
 FINAL_BID_WINDOW_START_TTE = 0.9 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
@@ -163,10 +163,8 @@ TTE_THRESHOLD_BID_UPDATE = 1.8    # Skip bid updates if TTE < 1.8s
 TTE_THRESHOLD_EVENT_SCAN = 2.0    # Skip event scanning if TTE < 2.0s
 # Note: Periodic Reward Fetch is already governed by MIN_TTE_FOR_GENERAL_REWARD_FETCH = 45s
 
-final_window_is_active = False
-
 # --- Simulation Mode Parameters ---
-SIMULATE_FINAL_WINDOW_MODE = True  # Set to True to activate simulation
+SIMULATE_FINAL_WINDOW_MODE = False  # Set to True to activate simulation
 SIMULATE_TTE_START = 60.0          # TTE (seconds) at which simulation will begin
 simulated_auction_end_time_override: Optional[float] = None # Internal state for simulation TTE
 simulation_has_run: bool = False # Ensures simulation runs only once if desired
@@ -185,7 +183,7 @@ DUMB_BID_PROFIT_MARGIN_ASSUMPTION: float = float(os.getenv('DUMB_BID_PROFIT_MARG
 MINIMUM_TTE_FOR_DUMB_BID: float = float(os.getenv('MINIMUM_TTE_FOR_DUMB_BID', '0.05'))
 
 
-MIN_TTE_FOR_GENERAL_REWARD_FETCH = 301 # No general reward HTTP calls if TTE < 301s
+MIN_TTE_FOR_GENERAL_REWARD_FETCH = 45 # No general reward HTTP calls if TTE < 45s
 PERIODIC_REWARD_FETCH_INTERVAL = 40 # How often to fetch rewards when safe
 EARLY_BID_REWARD_FETCH_INTERVAL = 3   # How often to fetch for early bids if needed
 
@@ -398,14 +396,35 @@ def initialize_bids_state(w3: Web3, sf_contract: Contract):
     logger.info("Initializing highest_bids and pool_locks from on-chain data.")
     pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()}
     for pid, pname in POOLS_ORIGINAL.items():
-        highest_bids[pid] = {"amount": 0.0, "user": "NO BIDDER", "tx_hash": None}
+        user, bid_amt = get_current_bid(w3, sf_contract, pid)
+        highest_bids[pid] = {"amount": bid_amt, "user": user, "tx_hash": "on-chain-init" if bid_amt > 0 else None}
+        if bid_amt > 0: logger.info(f"Init bid for {pname}: {bid_amt:.4f} $AG by {user}")
     logger.debug(f"Initialized highest_bids: {len(highest_bids)} entries.")
 
 def update_bids_from_chain(w3: Web3, sf_contract: Contract, pools_to_check: Dict[str, str]):
-    # This function is too slow and will be replaced with a multicall implementation.
-    # For now, we will just log a message and return.
-    logger.info("Bypassing `update_bids_from_chain` to prevent blocking.")
-    return
+    pool_count = len(pools_to_check)
+    logger.debug(f"Updating bids from chain for {pool_count} pool(s)...")
+    
+    checked_count = 0
+    for pid, pname in pools_to_check.items():
+        if pool_count > 10 and checked_count > 0 and checked_count % 5 == 0: 
+            time.sleep(0.05) 
+            
+        user, bid_amt = get_current_bid(w3, sf_contract, pid, timeout=0.4) 
+        current_local = highest_bids.get(pid, {"amount": 0.0, "user": "NO BIDDER"})
+        
+        bid_changed = False
+        if abs(bid_amt - current_local["amount"]) > 1e-9: 
+            bid_changed = True
+        elif bid_amt > 0 and user != current_local["user"]: 
+            bid_changed = True
+        elif bid_amt == 0 and current_local["amount"] > 0: 
+            bid_changed = True
+
+        if bid_changed:
+            highest_bids[pid] = {"amount": bid_amt, "user": user, "tx_hash": "on-chain-update" if bid_amt > 0 else None}
+            logger.info(f"Updated bid for {pname} ({pid[:6]}..): {bid_amt:.4f} $AG by {user if user != 'NO BIDDER' else 'N/A'}" if bid_amt > 0 else f"Cleared/No bid for {pname} ({pid[:6]}..)")
+        checked_count += 1
 
 
 def fetch_pool_rewards_data(sf_contract: Contract) -> List[Dict[str, Any]]:
@@ -425,17 +444,17 @@ def fetch_pool_rewards_data(sf_contract: Contract) -> List[Dict[str, Any]]:
                 resp.raise_for_status(); data = resp.json()
                 reward_val = data.get("totalInGiven", 0) * 0.425
                 results.append({
-                    "pool_id": pid,
-                    "pool_name": pname,
-                    "reward_agency": reward_val,
+                    "pool_id": pid, 
+                    "pool_name": pname, 
+                    "reward_agency": reward_val, 
                     "total_value_raw": data.get("totalInGiven",0),
                     "api_period_hours_sent": period_hrs,
                     "api_last_execution_used": last_exec
                 })
-            except requests.exceptions.RequestException as he:
+            except requests.exceptions.RequestException as he: 
                 logger.error(f"Reward HTTP error for {pname} ({pid}) URL {api_url}: {he}")
                 results.append({"pool_id": pid, "pool_name": pname, "reward_agency": 0.0, "error": str(he)})
-            except Exception as e:
+            except Exception as e: 
                 logger.error(f"Reward fetch general error for {pname} ({pid}): {e}", exc_info=False)
                 results.append({"pool_id": pid, "pool_name": pname, "reward_agency": 0.0, "error": str(e)})
     return results
@@ -652,7 +671,7 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
     try:
         bid_wei = w3.to_wei(rounded_bid, 'ether')
         # gas_mult = 1.4 if urgency == "URGENT" else 1.25
-        gas_mult = {"URGENT": 1.5, "NORMAL": 1, "LOW": 1}.get(urgency, 1)# We don't want to spend much as we want to be last in the block
+        gas_mult = {"URGENT": 1.5, "NORMAL": 1.5, "LOW": 1}.get(urgency, 1)# We don't want to spend much as we want to be last in the block
         current_gas_price = w3.eth.gas_price
         tx_params = {
             'from': WALLET_ADDRESS, 
@@ -766,7 +785,7 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
         bid_amounts_wei = [w3.to_wei(round(amount, 8), 'ether') if amount != 0.0 else 0 for amount in bid_amounts_eth]
         
         #gas_mult = 1.45 if urgency == "URGENT" else 1.3 
-        gas_mult = {"URGENT": 1.5, "NORMAL": 1, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
+        gas_mult = {"URGENT": 1.5, "NORMAL": 1.5, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
         current_gas_price = w3.eth.gas_price
         tx_params = {
             'from': WALLET_ADDRESS, 
@@ -1149,43 +1168,6 @@ w3_instance = connect_to_blockchain(SONIC_RPC_URLS)
 silver_fees_contract_instance = w3_instance.eth.contract(address=SILVER_FEES_CONTRACT_ADDRESS, abi=SILVER_FEES_ABI)
 pool_bidder_contract_instance = w3_instance.eth.contract(address=POOL_BIDDER_CONTRACT_ADDRESS, abi=POOL_BIDDER_ABI)
 
-def final_window_trigger_thread():
-    global final_window_is_active, AUCTION_END_TIME, FINAL_BID_WINDOW_START_TTE, SIMULATE_FINAL_WINDOW_MODE, simulated_auction_end_time_override
-    logger.info("Final window trigger thread started.")
-    while True:
-        end_time = simulated_auction_end_time_override if SIMULATE_FINAL_WINDOW_MODE and simulated_auction_end_time_override is not None else AUCTION_END_TIME
-        if end_time is not None:
-            time_to_auction_end = end_time - datetime.datetime.now(datetime.timezone.utc).timestamp()
-            logger.debug(f"Trigger thread: TTE {time_to_auction_end:.4f}s")
-            if 0 < time_to_auction_end <= FINAL_BID_WINDOW_START_TTE:
-                final_window_is_active = True
-                logger.info(f"Final bidding window triggered by thread at TTE {time_to_auction_end:.4f}s.")
-                break
-        time.sleep(0.01)
-
-def periodic_reward_fetch_thread():
-    global last_rewards, last_reward_check_time, silver_fees_contract_instance
-    while True:
-        if not final_window_is_active:
-            logger.info("Periodic reward fetch thread fetching rewards...")
-            rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
-            for r_info in rewards_data:
-                if "error" not in r_info and r_info.get("pool_id"):
-                    last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
-            last_reward_check_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
-            logger.info("Periodic reward fetch thread finished.")
-        time.sleep(PERIODIC_REWARD_FETCH_INTERVAL)
-
-def periodic_bid_update_thread():
-    global w3_instance, silver_fees_contract_instance, POOLS, hot_list_created, POOLS_ORIGINAL
-    while True:
-        if not final_window_is_active:
-            logger.info("Periodic bid update thread updating bids...")
-            pools_for_update = POOLS if hot_list_created and POOLS else POOLS_ORIGINAL
-            update_bids_from_chain(w3_instance, silver_fees_contract_instance, pools_for_update)
-            logger.info("Periodic bid update thread finished.")
-        time.sleep(3.5)
-
 def main(force_mode: bool = False):
     global AUCTION_END_TIME, highest_bids, last_rewards, event_scanner_failed
     global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold
@@ -1195,12 +1177,6 @@ def main(force_mode: bool = False):
 
     if not POOLS_ORIGINAL: POOLS_ORIGINAL.update(POOLS); 
     if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()} 
-
-    trigger_thread = threading.Thread(target=final_window_trigger_thread, daemon=True)
-    trigger_thread.start()
-
-    bid_update_thread = threading.Thread(target=periodic_bid_update_thread, daemon=True)
-    bid_update_thread.start()
 
     # --- Dynamic Average Block Time Estimation ---
     BLOCK_TIME_ESTIMATION_SECONDS = 15
@@ -1347,9 +1323,16 @@ def main(force_mode: bool = False):
                 reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
                 continue    
 
-            logger.info(f"TTE: {time_to_auction_end:.4f}s")
+            logger.debug(
+                f"TTE DEBUG: AUCTION_END_TIME={AUCTION_END_TIME:.4f} ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat()}), "
+                f"NOW_UTC={now_timestamp_utc:.4f} ({now_datetime_utc.isoformat()}), "
+                f"CALCULATED TTE = {time_to_auction_end:.2f}s"
+            )
 
-            if final_window_is_active:
+            final_bid_window_active = (0 < time_to_auction_end <= FINAL_BID_WINDOW_START_TTE) or \
+                                      (force_mode and 0 < time_to_auction_end)      
+            
+            if final_bid_window_active:
                 logger.info(f"Entering Final Bidding Phase (TTE: {time_to_auction_end:.2f}s). Monitored Pools: {list(POOLS.keys())}")
                 
                 pools_for_initial_batch_ids: List[str] = []
@@ -1423,9 +1406,7 @@ def main(force_mode: bool = False):
 
                     for i_dumb_repeat in range(DUMB_BID_REPEATS):
                         time.sleep(DUMB_BID_REPEAT_DELAY)
-
-                        end_time_for_dumb_check = simulated_auction_end_time_override if SIMULATE_FINAL_WINDOW_MODE and simulated_auction_end_time_override is not None else AUCTION_END_TIME
-                        current_tte_dumb = end_time_for_dumb_check - datetime.datetime.now(datetime.timezone.utc).timestamp()
+                        current_tte_dumb = AUCTION_END_TIME - time.time()
 
                         if current_tte_dumb <= MINIMUM_TTE_FOR_DUMB_BID:
                             logger.info(f"Dumb Bid Repeat {i_dumb_repeat+1}: TTE {current_tte_dumb:.3f}s too low (<= {MINIMUM_TTE_FOR_DUMB_BID}s), stopping dumb bids.")
@@ -1479,7 +1460,83 @@ def main(force_mode: bool = False):
                             logger.error(f"Dumb Bid Repeat {i_dumb_repeat+1} FAILED. Tx/Error: {dumb_repeat_tx_hash if dumb_repeat_tx_hash else 'Pre-flight fail'}. Stopping dumb bids.")
                             break # Stop dumb bidding if a batch fails
                     logger.info("--- Finished Dumb Bidding Mode sequence ---")
-                    break
+
+                elif not DUMB_BIDDING_MODE and batch_success and initial_batch_optimistic_bids:
+                    # Populate my_reactive_bids only if not in dumb mode and initial batch was successful
+                    my_reactive_bids = dict(initial_batch_optimistic_bids)
+                    logger.info(f"Entering HYPER-REACTIVE mode for pools: {[POOLS_ORIGINAL.get(p, p) for p in my_reactive_bids.keys()]}")
+                    
+                    # --- EXISTING HYPER-REACTIVE LOOP (indented under this 'elif') ---
+                    while True:
+                        now_ts_in_hyper_loop = datetime.datetime.now(datetime.timezone.utc).timestamp()
+                        current_tte_hyper = AUCTION_END_TIME - now_ts_in_hyper_loop
+                        
+                        if current_tte_hyper <= MINIMUM_TTE_FOR_REACTION:
+                            logger.info(f"Exiting HYPER-REACTIVE mode: TTE {current_tte_hyper:.3f}s <= {MINIMUM_TTE_FOR_REACTION}s")
+                            break
+                        
+                        if not my_reactive_bids: 
+                            logger.info("Exiting HYPER-REACTIVE mode: No more pools to watch.")
+                            break
+
+                        for p_id_hyper in list(my_reactive_bids.keys()): 
+                            current_tte_for_pool_check = AUCTION_END_TIME - datetime.datetime.now(datetime.timezone.utc).timestamp()
+                            if current_tte_for_pool_check <= MINIMUM_TTE_FOR_REACTION:
+                                continue 
+
+                            current_bidder_onchain_hyper, onchain_bid_amount_hyper = get_current_bid(
+                                w3_instance, silver_fees_contract_instance, p_id_hyper, timeout=GET_CURRENT_BID_TIMEOUT_HYPER
+                            )
+                            my_last_intended_bid_for_pool = my_reactive_bids.get(p_id_hyper, 0.0)
+
+                            is_outbid = False
+                            if current_bidder_onchain_hyper != POOL_BIDDER_CONTRACT_ADDRESS:
+                                if onchain_bid_amount_hyper >= my_last_intended_bid_for_pool - 1e-9: 
+                                    is_outbid = True
+                            elif onchain_bid_amount_hyper > my_last_intended_bid_for_pool + 1e-9: 
+                                is_outbid = True 
+                            
+                            if is_outbid:
+                                reward_hyper = last_rewards.get(p_id_hyper)
+                                if reward_hyper is not None:
+                                    next_bid_target = round(onchain_bid_amount_hyper + CONTRACT_DEFAULT_INCREMENT_AMOUNT, 8)
+                                    
+                                    is_profitable_to_counter = reward_hyper > next_bid_target + FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN
+                                    
+                                    should_attempt_reactive_bid = False
+                                    if current_bidder_onchain_hyper != POOL_BIDDER_CONTRACT_ADDRESS: 
+                                        should_attempt_reactive_bid = True
+                                    elif next_bid_target > my_last_intended_bid_for_pool + 1e-9: 
+                                        should_attempt_reactive_bid = True
+
+                                    if is_profitable_to_counter and should_attempt_reactive_bid :
+                                        logger.info(f"Hyper-Reactive: Condition met for {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}. Onchain: {onchain_bid_amount_hyper:.4f} by {current_bidder_onchain_hyper}. MyLastIntended: {my_last_intended_bid_for_pool:.4f}. Countering for ~{next_bid_target:.4f}. TTE: {current_tte_hyper:.3f}s")
+                                        bid_success_reactive, tx_hash_reactive = place_bid_with_poolbidder(
+                                            w3_instance, pool_bidder_contract_instance, 0.0, p_id_hyper, "URGENT"
+                                        )
+                                        if bid_success_reactive:
+                                            my_reactive_bids[p_id_hyper] = next_bid_target 
+                                            highest_bids[p_id_hyper] = { 
+                                                "amount": next_bid_target,
+                                                "user": POOL_BIDDER_CONTRACT_ADDRESS,
+                                                "tx_hash": tx_hash_reactive 
+                                            }
+                                    elif not is_profitable_to_counter:
+                                        logger.debug(f"Hyper-Reactive: Skipping {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}, not profitable. Reward: {reward_hyper:.4f}, Next Target: {next_bid_target:.4f}")
+                                    else: 
+                                        logger.debug(f"Hyper-Reactive: We are likely leading {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)} and new target {next_bid_target:.4f} isn't a necessary increase over last intended {my_last_intended_bid_for_pool:.4f}, or current onchain {onchain_bid_amount_hyper:.4f} is already good.")
+                                        if current_bidder_onchain_hyper == POOL_BIDDER_CONTRACT_ADDRESS and onchain_bid_amount_hyper > my_last_intended_bid_for_pool:
+                                            my_reactive_bids[p_id_hyper] = onchain_bid_amount_hyper
+                                else: 
+                                    logger.warning(f"Hyper-Reactive: No reward data for {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)}, cannot counter bid.")
+                            elif current_bidder_onchain_hyper == POOL_BIDDER_CONTRACT_ADDRESS and onchain_bid_amount_hyper > my_last_intended_bid_for_pool + 1e-9:
+                                my_reactive_bids[p_id_hyper] = onchain_bid_amount_hyper
+                                logger.debug(f"Hyper-Reactive: Confirmed our lead on {POOLS_ORIGINAL.get(p_id_hyper, p_id_hyper)} with updated amount {onchain_bid_amount_hyper:.4f}")
+                            
+                            if len(my_reactive_bids) > 1: time.sleep(0.001) 
+
+                        time.sleep(HYPER_REACTIVE_CHECK_INTERVAL) 
+                    logger.info("Exited HYPER-REACTIVE mode.")
                 else: 
                     logger.info("No pools identified for initial final batch bid, or initial batch failed/no pools to watch. Skipping hyper-reactive mode.")
 
@@ -1493,7 +1550,14 @@ def main(force_mode: bool = False):
                 except Exception as e: logger.error(f"PoolBidder $AG balance check failed: {e}")
                 last_pb_bal_check_time = now_timestamp_utc
 
-            if not final_window_is_active:
+            if not final_bid_window_active: 
+                bid_upd_interval = 0.5 if time_to_auction_end <= 60 else 3.5
+                if time_to_auction_end > TTE_THRESHOLD_BID_UPDATE and \
+                   (now_timestamp_utc - last_bid_update_time >= bid_upd_interval):
+                    pools_for_update = POOLS if hot_list_created and POOLS else POOLS_ORIGINAL
+                    logger.info(f"Bid update interval reached. Updating {len(pools_for_update)} pools.")
+                    update_bids_from_chain(w3_instance, silver_fees_contract_instance, pools_for_update)
+                    last_bid_update_time = now_timestamp_utc
                 
                 # Determine if early bids should be processed (not in simulation and conditions met)
                 should_process_early_bids = (
@@ -1535,7 +1599,7 @@ def main(force_mode: bool = False):
                         logger.info(f"Attempting multi-bid for {len(pools_to_bid_ids)} early bird pools.")
                         multi_bid_success, tx_details = place_multiple_bids_with_poolbidder(
                             w3_instance, pool_bidder_contract_instance, 
-                            pools_to_bid_ids, bid_amounts_for_pools, urgency="NORMAL"
+                            pools_to_bid_ids, bid_amounts_for_pools, urgency="LOW"
                         )
                         if multi_bid_success:
                             logger.info(f"Early bird multi-bid SUCCESSFUL. Tx: {tx_details}")
@@ -1556,21 +1620,19 @@ def main(force_mode: bool = False):
                         early_bid_times_queue.pop(0)
                         logger.info(f"Processed early bid threshold {current_threshold}s. Remaining queue: {early_bid_times_queue}")
 
+                elif SIMULATE_FINAL_WINDOW_MODE and early_bid_times_queue and \
+                     0 < time_to_auction_end <= early_bid_times_queue[0] and \
+                     not early_bids_processed_for_threshold.get(early_bid_times_queue[0], False):
+                    # This log ensures we know why early bids didn't run if it was due to simulation mode
+                    # and the TTE would have otherwise triggered it.
+                    logger.debug(f"[SIMULATION] Skipping early bids processing block due to SIMULATE_FINAL_WINDOW_MODE active (Simulated TTE: {time_to_auction_end:.2f}s would have met threshold {early_bid_times_queue[0]}s).")
+
                 if not hot_list_created and HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE:
                     # Note: time_to_auction_end here will be the simulated TTE if SIMULATE_FINAL_WINDOW_MODE is True.
                     # Hotlist creation might behave unexpectedly if SIMULATE_TTE_START is within its window.
                     # For robust simulation of just the final window, ensure SIMULATE_TTE_START is below HOT_LIST_CREATION_END_TTE (25s).
                     # Current SIMULATE_TTE_START = 20.0s, so this is fine.
-                    logger.info(f"Creating Hot List (TTE: {time_to_auction_end:.2f}s).")
-
-                    logger.info("Fetching rewards for hot list creation...")
-                    rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
-                    for r_info in rewards_data:
-                        if "error" not in r_info and r_info.get("pool_id"):
-                            last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
-                    last_reward_check_time = now_timestamp_utc
-                    logger.info("Rewards fetched for hot list creation.")
-
+                    logger.info(f"Creating Hot List (TTE: {time_to_auction_end:.2f}s). Using cached rewards only.")
                     temp_hot_pools = {}
                     for pid, pname in POOLS_ORIGINAL.items():
                         reward = last_rewards.get(pid)
@@ -1595,6 +1657,21 @@ def main(force_mode: bool = False):
                     hot_list_created = True
                     log_auction_state_to_file() # Log state after hotlist determination
                                                             
+                is_early_bid_fetch_time = (early_bid_times_queue and 
+                                        (early_bid_times_queue[0] - EARLY_BID_REWARD_FETCH_INTERVAL - 2 < time_to_auction_end <= early_bid_times_queue[0] + 5))
+                can_do_periodic_fetch = (time_to_auction_end > MIN_TTE_FOR_GENERAL_REWARD_FETCH and not is_early_bid_fetch_time and (now_timestamp_utc - last_reward_check_time >= PERIODIC_REWARD_FETCH_INTERVAL))
+
+                if can_do_periodic_fetch:
+                    logger.info(f"Periodic reward fetch (TTE: {time_to_auction_end:.2f}s)")
+                    rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
+                    for r_info in rewards_data:
+                        if "error" not in r_info and r_info.get("pool_id"):
+                            last_rewards[r_info["pool_id"]] = r_info["reward_agency"]
+                    last_reward_check_time = now_timestamp_utc
+                elif time_to_auction_end <= MIN_TTE_FOR_GENERAL_REWARD_FETCH:
+                    logger.debug(f"Skipping general periodic reward fetch: TTE {time_to_auction_end:.2f}s <= MIN_TTE_FOR_GENERAL_REWARD_FETCH ({MIN_TTE_FOR_GENERAL_REWARD_FETCH}s).")
+                elif is_early_bid_fetch_time:
+                    logger.debug(f"Skipping general periodic reward fetch: Early bid window is active/imminent.")
             else: # This else is for 'if not final_bid_window_active:'
                 logger.debug(f"Final bidding window is active (TTE: {time_to_auction_end:.2f}s). Skipping regular updates and early bids.")
                 
@@ -1692,14 +1769,11 @@ def main(force_mode: bool = False):
                 time.sleep(60)
         except ContractLogicError as e_cl_main: logger.error(f"Main Loop ContractLogicError: {e_cl_main}"); time.sleep(3)
         except Exception as e_unhandled_main: logger.exception(f"Unhandled Main Loop Error: {e_unhandled_main}"); time.sleep(5)
-        time.sleep(0.01)
 
 if __name__ == "__main__":
     try:
         if not POOLS_ORIGINAL: POOLS_ORIGINAL.update(POOLS) 
         if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()}
-        reward_thread = threading.Thread(target=periodic_reward_fetch_thread, daemon=True)
-        reward_thread.start()
         force_arg = "--force" in sys.argv
         main(force_mode=force_arg)
     except KeyboardInterrupt: logger.info("Script terminated by user (Ctrl+C).")

@@ -454,13 +454,15 @@ def fetch_pool_rewards_data(sf_contract: Contract) -> List[Dict[str, Any]]:
 
 def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
     global AUCTION_END_TIME, highest_bids, last_rewards, hot_list_created, early_bid_times_queue, early_bids_processed_for_threshold
-    global last_reward_check_time, POOLS, pool_locks, GLOBAL_AVG_BLOCK_TIME, CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK
+    global last_reward_check_time, POOLS, pool_locks, GLOBAL_AVG_BLOCK_TIME, CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK, bid_log_data, reward_summary_data
     logger.info("Resetting state for new auction cycle...")
     
     CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK = None 
 
     last_rewards.clear(); highest_bids.clear(); last_bids.clear()
     hot_list_created = False
+    bid_log_data.clear()
+    reward_summary_data.clear()
     
     POOLS.clear(); POOLS.update(POOLS_ORIGINAL)
     pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()}
@@ -1533,7 +1535,7 @@ def main(force_mode: bool = False):
                     # and the TTE would have otherwise triggered it.
                     logger.debug(f"[SIMULATION] Skipping early bids processing block due to SIMULATE_FINAL_WINDOW_MODE active (Simulated TTE: {time_to_auction_end:.2f}s would have met threshold {early_bid_times_queue[0]}s).")
 
-                if not hot_list_created and HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE:
+                if HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE:
                     # Note: time_to_auction_end here will be the simulated TTE if SIMULATE_FINAL_WINDOW_MODE is True.
                     # Hotlist creation might behave unexpectedly if SIMULATE_TTE_START is within its window.
                     # For robust simulation of just the final window, ensure SIMULATE_TTE_START is below HOT_LIST_CREATION_END_TTE (25s).
@@ -1542,7 +1544,7 @@ def main(force_mode: bool = False):
                     temp_hot_pools = {}
                     for pid, pname in POOLS_ORIGINAL.items():
                         reward = last_rewards.get(pid)
-                        if reward is None: 
+                        if reward is None:
                             logger.debug(f"HotList: Skipping {pname}, no cached reward.")
                             continue
                         cb = highest_bids.get(pid, {}).get("amount", 0.0)
@@ -1550,14 +1552,14 @@ def main(force_mode: bool = False):
                         if reward > hypothetical_next_bid_val + HOT_LIST_MIN_POTENTIAL_PROFIT:
                             temp_hot_pools[pid] = pname
                             logger.info(f"HotList ADD: {pname} (R:{reward:.3f} C:{cb:.3f} ProfitPostContractBid:{(reward - hypothetical_next_bid_val):.3f})")
-                    
-                    if temp_hot_pools: 
+
+                    if temp_hot_pools:
                         POOLS.clear(); POOLS.update(temp_hot_pools)
-                        pool_locks = {hpid: Lock() for hpid in POOLS.keys()} 
+                        pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
                         logger.info(f"Hot List ACTIVE with {len(POOLS)} pools: {list(POOLS.values())}")
-                    else: 
+                    else:
                         logger.warning("No pools qualified for Hot List. Final bidding will consider all original pools.")
-                        if not POOLS: 
+                        if not POOLS:
                             POOLS.update(POOLS_ORIGINAL)
                             pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
                     hot_list_created = True

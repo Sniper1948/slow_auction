@@ -147,9 +147,9 @@ CONTRACT_DEFAULT_INCREMENT_AMOUNT = 0.1 # Standard increment your contract uses 
 
 HOT_LIST_CREATION_START_TTE = 45  # Start creating hot list 45s before end
 HOT_LIST_CREATION_END_TTE = 25    # Aim to have it done by 25s before end
-HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_INCREMENT_AMOUNT) + THIS
+HOT_LIST_MIN_POTENTIAL_PROFIT = 0.01 # Reward > (current_bid + CONTRACT_DEFAULT_INCREMENT_AMOUNT) + THIS
 
-FINAL_BID_WINDOW_START_TTE = 1.2 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
+FINAL_BID_WINDOW_START_TTE = 0.9 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
 
 # --- Hyper-Reactive Bidding Parameters ---
@@ -666,7 +666,7 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
     try:
         bid_wei = w3.to_wei(rounded_bid, 'ether')
         # gas_mult = 1.4 if urgency == "URGENT" else 1.25
-        gas_mult = {"URGENT": 1, "NORMAL": 1, "LOW": 1}.get(urgency, 1)# We don't want to spend much as we want to be last in the block
+        gas_mult = {"URGENT": 1.5, "NORMAL": 1.5, "LOW": 1}.get(urgency, 1)# We don't want to spend much as we want to be last in the block
         current_gas_price = w3.eth.gas_price
         tx_params = {
             'from': WALLET_ADDRESS, 
@@ -780,7 +780,7 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
         bid_amounts_wei = [w3.to_wei(round(amount, 8), 'ether') if amount != 0.0 else 0 for amount in bid_amounts_eth]
         
         #gas_mult = 1.45 if urgency == "URGENT" else 1.3 
-        gas_mult = {"URGENT": 1, "NORMAL": 1, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
+        gas_mult = {"URGENT": 1.5, "NORMAL": 1.5, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
         current_gas_price = w3.eth.gas_price
         tx_params = {
             'from': WALLET_ADDRESS, 
@@ -1535,7 +1535,7 @@ def main(force_mode: bool = False):
                     # and the TTE would have otherwise triggered it.
                     logger.debug(f"[SIMULATION] Skipping early bids processing block due to SIMULATE_FINAL_WINDOW_MODE active (Simulated TTE: {time_to_auction_end:.2f}s would have met threshold {early_bid_times_queue[0]}s).")
 
-                if HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE:
+                if not hot_list_created and HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE:
                     # Note: time_to_auction_end here will be the simulated TTE if SIMULATE_FINAL_WINDOW_MODE is True.
                     # Hotlist creation might behave unexpectedly if SIMULATE_TTE_START is within its window.
                     # For robust simulation of just the final window, ensure SIMULATE_TTE_START is below HOT_LIST_CREATION_END_TTE (25s).

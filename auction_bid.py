@@ -149,7 +149,7 @@ HOT_LIST_CREATION_START_TTE = 45  # Start creating hot list 45s before end
 HOT_LIST_CREATION_END_TTE = 25    # Aim to have it done by 25s before end
 HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_INCREMENT_AMOUNT) + THIS
 
-FINAL_BID_WINDOW_START_TTE = 1.2 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
+FINAL_BID_WINDOW_START_TTE = 1.1 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
 
 # --- Hyper-Reactive Bidding Parameters ---
@@ -174,12 +174,13 @@ MAX_BLOCKS_PER_SCAN__TTE = 100    # Max blocks to scan in one go if TTE is low
 TTE_FOR_REDUCED_SCAN_RANGE = 30.0  # TTE below which scan range is reduced
 MAX_INITIAL_CATCHUP_SCAN_BLOCKS = 2000 # Max blocks for the very first catch-up scan in a cycle
 
-
-
 MIN_TTE_FOR_GENERAL_REWARD_FETCH = 45 # No general reward HTTP calls if TTE < 45s
 PERIODIC_REWARD_FETCH_INTERVAL = 40 # How often to fetch rewards when safe
 EARLY_BID_REWARD_FETCH_INTERVAL = 3   # How often to fetch for early bids if needed
 
+# --- Periodic Auction End Time Sync Update ---
+SYNC_CHECK_INTERVAL = 600  # Check every 10 minutes (in seconds)
+TTE_THRESHOLD_SYNC_UPDATE = 120  # Skip update if TTE < 2 minutes (in seconds)
 
 # Load ABIs
 try:
@@ -1173,6 +1174,9 @@ def main(force_mode: bool = False):
     if not POOLS_ORIGINAL: POOLS_ORIGINAL.update(POOLS); 
     if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()} 
 
+
+    last_sync_check_time = 0.0  # Track last check (this is how we see if they updated the end time)
+
     # --- Dynamic Average Block Time Estimation ---
     BLOCK_TIME_ESTIMATION_SECONDS = 15
     logger.info(f"Estimating average block time over ~{BLOCK_TIME_ESTIMATION_SECONDS} seconds...")
@@ -1276,6 +1280,32 @@ def main(force_mode: bool = False):
                     time_to_auction_end = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
             else: # Not in simulation mode
                 time_to_auction_end = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
+
+            # I just added this to ensure that the auction end time is updated if it has changed.
+            # It will give a warning if there are sneaky auction timing change tricks
+            if (now_timestamp_utc - last_sync_check_time >= SYNC_CHECK_INTERVAL and
+                real_tte > TTE_THRESHOLD_SYNC_UPDATE and AUCTION_END_TIME is not None):
+                try:
+                    sync_data = silver_fees_contract_instance.functions.syncFeesManagementData().call()
+                    next_sync_ts = sync_data[2]  # syncFeesManagementData.nextSync
+                    time_diff = next_sync_ts - AUCTION_END_TIME
+                    old_end_time = AUCTION_END_TIME
+                    old_end_time_str = datetime.datetime.fromtimestamp(old_end_time, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
+                    new_end_time_str = datetime.datetime.fromtimestamp(next_sync_ts, tz=datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
+
+                    if abs(time_diff) <= 60:
+                        logger.info(f"Auction end time unchanged. Current: {old_end_time_str}")
+                    else:
+                        AUCTION_END_TIME = float(next_sync_ts)
+                        diff_str = f"+{time_diff:.0f}" if time_diff > 0 else f"{time_diff:.0f}"
+                        logger.info(
+                            f"Auction end time changed. Was {old_end_time_str} now {new_end_time_str}. "
+                            f"Difference {diff_str} seconds."
+                        )
+                    last_sync_check_time = now_timestamp_utc
+                except Exception as e_sync_update:
+                    logger.error(f"Failed to update AUCTION_END_TIME: {e_sync_update}")
+                    last_sync_check_time = now_timestamp_utc  # Avoid retry spam
 
 
             # Real auction end processing:

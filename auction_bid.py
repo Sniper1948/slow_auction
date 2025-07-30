@@ -1447,26 +1447,13 @@ def main(force_mode: bool = False):
                     def bid_thread_target(pool_id, bid_amount, urgency):
                         place_bid_with_poolbidder(w3_instance, pool_bidder_contract_instance, bid_amount, pool_id, urgency)
 
-                    for p_id, p_name in POOLS.items():
-                        if p_id in initial_batch_optimistic_bids:
-                            reward = last_rewards.get(p_id)
-                            if reward is None:
-                                logger.warning(f"No cached reward for {p_name} in threaded bid, skipping.")
-                                continue
-
-                            # Assume we were outbid by 0.1
-                            assumed_opponent_bid = initial_batch_optimistic_bids[p_id] + 0.1
-                            
-                            # Our next bid would be 0.1 over that
-                            threaded_bid_amount = assumed_opponent_bid + 0.1
-
-                            if reward > threaded_bid_amount + FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN:
-                                logger.info(f"Threaded Bid Add: {p_name}. Profitable for threaded bid (R:{reward:.3f} ThreadedBid:{threaded_bid_amount:.3f})")
+                    for i in range(NUMBER_OF_HOT_LISTS):
+                        hotlist = hot_lists[i]
+                        for p_id, p_name in hotlist.items():
+                                logger.info(f"Threaded Bid Add: {p_name} from hotlist {i+1}")
                                 bid_thread = threading.Thread(target=bid_thread_target, args=(p_id, 0.0, "URGENT"))
                                 bid_thread.start()
-                                time.sleep(THREAD_INTERVAL)
-                            else:
-                                logger.debug(f"Skipping {p_name} from threaded bid: Reward {reward:.3f} not sufficient for threaded bid {threaded_bid_amount:.3f}")
+                        time.sleep(THREAD_INTERVAL)
 
             if time_to_auction_end > TTE_THRESHOLD_BALANCE_CHECK and \
                (now_timestamp_utc - last_pb_bal_check_time >= 600):
@@ -1581,16 +1568,12 @@ def main(force_mode: bool = False):
                                 hot_lists[i][pid] = pname
                                 logger.info(f"HotList {i+1} ADD: {pname} (R:{reward:.3f} C:{cb:.3f} Profit > {HOT_LIST_PROFIT_TIERS[i]})")
 
-                    # For now, we'll just use the first hotlist. The other lists are created but not used yet.
+                    POOLS.clear()
                     if hot_lists[0]:
-                        POOLS.clear(); POOLS.update(hot_lists[0])
-                        pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
-                        logger.info(f"Hot List ACTIVE with {len(POOLS)} pools: {list(POOLS.values())}")
-                    else:
-                        logger.warning("No pools qualified for Hot List. Final bidding will consider all original pools.")
-                        if not POOLS:
-                            POOLS.update(POOLS_ORIGINAL)
-                            pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
+                        POOLS.update(hot_lists[0])
+                    pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
+                    logger.info(f"Hot List ACTIVE with {len(POOLS)} pools: {list(POOLS.values())}")
+
                     hot_list_created = True
                     log_auction_state_to_file()
                                                             

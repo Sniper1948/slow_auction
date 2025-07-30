@@ -1379,15 +1379,17 @@ def main(force_mode: bool = False):
             if final_bid_window_active:
                 logger.info(f"Entering Final Bidding Phase (TTE: {time_to_auction_end:.2f}s).")
 
-                def bid_thread_target(pool_id, bid_amount, urgency):
-                    place_bid_with_poolbidder(w3_instance, pool_bidder_contract_instance, bid_amount, pool_id, urgency)
+                def bid_thread_target(pool_ids, bid_amounts, urgency):
+                    place_multiple_bids_with_poolbidder(w3_instance, pool_bidder_contract_instance, pool_ids, bid_amounts, urgency)
 
                 for i in range(NUMBER_OF_HOT_LISTS):
                     hotlist = hot_lists[i]
-                    for p_id, p_name in hotlist.items():
-                            logger.info(f"Threaded Bid Add: {p_name} from hotlist {i+1}")
-                            bid_thread = threading.Thread(target=bid_thread_target, args=(p_id, 0.0, "URGENT"))
-                            bid_thread.start()
+                    if hotlist:
+                        pool_ids = list(hotlist.keys())
+                        bid_amounts = [0.0] * len(pool_ids)
+                        logger.info(f"Threaded Bid Add: {len(pool_ids)} pools from hotlist {i+1}")
+                        bid_thread = threading.Thread(target=bid_thread_target, args=(pool_ids, bid_amounts, "URGENT"))
+                        bid_thread.start()
                     time.sleep(THREAD_INTERVAL)
 
             if time_to_auction_end > TTE_THRESHOLD_BALANCE_CHECK and \

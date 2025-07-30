@@ -22,6 +22,8 @@ from eth_abi.codec import ABICodec
 from dotenv import load_dotenv
 from threading import Lock
 
+nonce_lock = Lock()
+
 # Script version
 SCRIPT_VERSION = "1.6.1" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
@@ -148,8 +150,8 @@ CONTRACT_DEFAULT_INCREMENT_AMOUNT = 0.1 # Standard increment your contract uses 
 HOT_LIST_CREATION_START_TTE = 45  # Start creating hot list 45s before end
 HOT_LIST_CREATION_END_TTE = 25    # Aim to have it done by 25s before end
 HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_INCREMENT_AMOUNT) + THIS
-NUMBER_OF_HOT_LISTS = 4 # Number of hotlists to create, we can increase this later
-HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4] # Profit tiers for the hotlists
+NUMBER_OF_HOT_LISTS = 6 # Number of hotlists to create, we can increase this later
+HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] # Profit tiers for the hotlists
 
 FINAL_BID_WINDOW_START_TTE = 1.1 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
@@ -671,13 +673,14 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
         bid_wei = w3.to_wei(rounded_bid, 'ether')
         # gas_mult = 1.4 if urgency == "URGENT" else 1.25
         gas_mult = {"URGENT": 1, "NORMAL": 1, "LOW": 1}.get(urgency, 1)# We don't want to spend much as we want to be last in the block
-        current_gas_price = w3.eth.gas_price
-        tx_params = {
-            'from': WALLET_ADDRESS, 
-            'nonce': w3.eth.get_transaction_count(WALLET_ADDRESS, 'pending'),
-            'gasPrice': int(current_gas_price * gas_mult), 
-            'chainId': 146
-        }
+        with nonce_lock:
+            current_gas_price = w3.eth.gas_price
+            tx_params = {
+                'from': WALLET_ADDRESS,
+                'nonce': w3.eth.get_transaction_count(WALLET_ADDRESS, 'pending'),
+                'gasPrice': int(current_gas_price * gas_mult),
+                'chainId': 146
+            }
         try:
             estimated_gas = pb_contract.functions.bidOnPool(pool_id, bid_wei).estimate_gas({'from': WALLET_ADDRESS, 'gasPrice': tx_params['gasPrice']})
             tx_params['gas'] = int(estimated_gas * 1.35) 

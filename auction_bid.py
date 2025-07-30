@@ -1286,6 +1286,7 @@ def main(force_mode: bool = False):
 
             # I just added this to ensure that the auction end time is updated if it has changed.
             # It will give a warning if there are sneaky auction timing change tricks
+            real_tte = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
             if (now_timestamp_utc - last_sync_check_time >= SYNC_CHECK_INTERVAL and
                 real_tte > TTE_THRESHOLD_SYNC_UPDATE and AUCTION_END_TIME is not None):
                 try:

@@ -130,7 +130,7 @@ event_scanner_failed: bool = False
 POOLS_ORIGINAL: Dict[str, str] = {} # Populated at startup
 hot_list_created: bool = False
 last_bids: Dict[str, float] = {} # Tracks last attempted bid amount for a pool if it failed low
-EARLY_BID_TIMES_CONFIG = sorted([808, 308], reverse=True) # Original config
+EARLY_BID_TIMES_CONFIG = sorted([808, 132], reverse=True) # Original config
 early_bid_times_queue: List[int] = [] # Mutable queue for current auction cycle
 early_bids_processed_for_threshold: Dict[int, bool] = {} # Tracks if a threshold time has been processed
 last_reward_check_time: float = 0
@@ -1433,11 +1433,11 @@ def main(force_mode: bool = False):
                     pools_to_bid_ids: List[str] = []
                     bid_amounts_for_pools: List[float] = []
 
-                    for p_id, p_name in POOLS_ORIGINAL.items(): 
+                    for p_id, p_name in POOLS_ORIGINAL.items():
                         reward = last_rewards.get(p_id)
-                        if reward is not None and EARLY_BID_MIN_REWARD_FOR_0_1_AG_BID <= reward < EARLY_BID_MAX_REWARD_FOR_0_1_AG_BID: 
+                        if reward is not None and reward > 0:
                             current_onchain_bid_amount = highest_bids.get(p_id, {}).get("amount", 0.0)
-                            if current_onchain_bid_amount < EARLY_BID_FIXED_AMOUNT: 
+                            if current_onchain_bid_amount < EARLY_BID_FIXED_AMOUNT:
                                 if p_id in last_bids and EARLY_BID_FIXED_AMOUNT <= round(last_bids[p_id], 8):
                                     logger.debug(f"Skipping {p_name} for early multi-bid: {EARLY_BID_FIXED_AMOUNT} AG is at or below last known failing bid {last_bids[p_id]:.4f}")
                                     continue

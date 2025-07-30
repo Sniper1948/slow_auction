@@ -148,6 +148,8 @@ CONTRACT_DEFAULT_INCREMENT_AMOUNT = 0.1 # Standard increment your contract uses 
 HOT_LIST_CREATION_START_TTE = 45  # Start creating hot list 45s before end
 HOT_LIST_CREATION_END_TTE = 25    # Aim to have it done by 25s before end
 HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_INCREMENT_AMOUNT) + THIS
+NUMBER_OF_HOT_LISTS = 4 # Number of hotlists to create, we can increase this later
+HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4] # Profit tiers for the hotlists
 
 FINAL_BID_WINDOW_START_TTE = 1.1 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
@@ -156,6 +158,7 @@ FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
 MINIMUM_TTE_FOR_REACTION = 0.15  # Minimum TTE (seconds) to continue reactive bidding. Below this, likely too late.
 HYPER_REACTIVE_CHECK_INTERVAL = 0.02 # Sleep interval (seconds) between full check cycles of reactive pools.
 GET_CURRENT_BID_TIMEOUT_HYPER = 0.05 # Timeout (seconds) for get_current_bid in hyper-reactive mode (50ms).
+THREAD_INTERVAL = 0.2 # Interval between each bid thread
 
 # --- Task Skipping TTE Thresholds (to ensure responsiveness for final window) ---
 TTE_THRESHOLD_BALANCE_CHECK = 5.0 # Skip balance check if TTE < 5.0s
@@ -1438,45 +1441,31 @@ def main(force_mode: bool = False):
                 
                 # --- DUMB BIDDING MODE ---
                 if batch_success and initial_batch_optimistic_bids:
-                    logger.info(f"Initial bid successful, proceeding with dumb bid.")
+                    logger.info(f"Initial bid successful, proceeding with threaded bidding.")
 
-                    # Wait for a short period to allow the initial bid to be potentially outbid
-                    time.sleep(0.3)
-
-                    pools_for_dumb_bid: List[str] = []
-                    amounts_for_dumb_bid: List[float] = []
+                    def bid_thread_target(pool_id, bid_amount, urgency):
+                        place_bid_with_poolbidder(w3_instance, pool_bidder_contract_instance, bid_amount, pool_id, urgency)
 
                     for p_id, p_name in POOLS.items():
                         if p_id in initial_batch_optimistic_bids:
                             reward = last_rewards.get(p_id)
                             if reward is None:
-                                logger.warning(f"No cached reward for {p_name} in dumb bid, skipping.")
+                                logger.warning(f"No cached reward for {p_name} in threaded bid, skipping.")
                                 continue
 
                             # Assume we were outbid by 0.1
                             assumed_opponent_bid = initial_batch_optimistic_bids[p_id] + 0.1
                             
                             # Our next bid would be 0.1 over that
-                            dumb_bid_amount = assumed_opponent_bid + 0.1
+                            threaded_bid_amount = assumed_opponent_bid + 0.1
 
-                            if reward > dumb_bid_amount + FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN:
-                                logger.info(f"Dumb Bid Add: {p_name}. Profitable for dumb bid (R:{reward:.3f} DumbBid:{dumb_bid_amount:.3f})")
-                                pools_for_dumb_bid.append(p_id)
-                                amounts_for_dumb_bid.append(0.0) # Auto-increment
+                            if reward > threaded_bid_amount + FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN:
+                                logger.info(f"Threaded Bid Add: {p_name}. Profitable for threaded bid (R:{reward:.3f} ThreadedBid:{threaded_bid_amount:.3f})")
+                                bid_thread = threading.Thread(target=bid_thread_target, args=(p_id, 0.0, "URGENT"))
+                                bid_thread.start()
+                                time.sleep(THREAD_INTERVAL)
                             else:
-                                logger.debug(f"Skipping {p_name} from dumb bid: Reward {reward:.3f} not sufficient for dumb bid {dumb_bid_amount:.3f}")
-
-                    if pools_for_dumb_bid:
-                        logger.info(f"Attempting dumb MULTI-BID for {len(pools_for_dumb_bid)} pools. Urgency: URGENT")
-                        dumb_batch_success, dumb_batch_tx_hash = place_multiple_bids_with_poolbidder(
-                            w3_instance, pool_bidder_contract_instance,
-                            pools_for_dumb_bid, amounts_for_dumb_bid,
-                            urgency="URGENT"
-                        )
-                        if dumb_batch_success and dumb_batch_tx_hash:
-                            logger.info(f"Dumb MULTI-BID SUBMITTED. Tx: {dumb_batch_tx_hash}")
-                        else:
-                            logger.error(f"Dumb MULTI-BID FAILED. Details: {dumb_batch_tx_hash if dumb_batch_tx_hash else 'No tx_hash / Pre-flight fail'}")
+                                logger.debug(f"Skipping {p_name} from threaded bid: Reward {reward:.3f} not sufficient for threaded bid {threaded_bid_amount:.3f}")
 
             if time_to_auction_end > TTE_THRESHOLD_BALANCE_CHECK and \
                (now_timestamp_utc - last_pb_bal_check_time >= 600):
@@ -1570,21 +1559,30 @@ def main(force_mode: bool = False):
                     # Hotlist creation might behave unexpectedly if SIMULATE_TTE_START is within its window.
                     # For robust simulation of just the final window, ensure SIMULATE_TTE_START is below HOT_LIST_CREATION_END_TTE (25s).
                     # Current SIMULATE_TTE_START = 20.0s, so this is fine.
-                    logger.info(f"Creating Hot List (TTE: {time_to_auction_end:.2f}s). Using cached rewards only.")
-                    temp_hot_pools = {}
+                    logger.info(f"Creating Hot Lists (TTE: {time_to_auction_end:.2f}s). Using cached rewards only.")
+                    hot_lists = [{} for _ in range(NUMBER_OF_HOT_LISTS)]
                     for pid, pname in POOLS_ORIGINAL.items():
                         reward = last_rewards.get(pid)
                         if reward is None:
                             logger.debug(f"HotList: Skipping {pname}, no cached reward.")
                             continue
                         cb = highest_bids.get(pid, {}).get("amount", 0.0)
+
+                        # First hotlist: all profitable bids
                         hypothetical_next_bid_val = cb + CONTRACT_DEFAULT_INCREMENT_AMOUNT if cb > 0 else CONTRACT_DEFAULT_INCREMENT_AMOUNT
                         if reward > hypothetical_next_bid_val + HOT_LIST_MIN_POTENTIAL_PROFIT:
-                            temp_hot_pools[pid] = pname
-                            logger.info(f"HotList ADD: {pname} (R:{reward:.3f} C:{cb:.3f} ProfitPostContractBid:{(reward - hypothetical_next_bid_val):.3f})")
+                            hot_lists[0][pid] = pname
+                            logger.info(f"HotList 1 ADD: {pname} (R:{reward:.3f} C:{cb:.3f} ProfitPostContractBid:{(reward - hypothetical_next_bid_val):.3f})")
 
-                    if temp_hot_pools:
-                        POOLS.clear(); POOLS.update(temp_hot_pools)
+                        # Subsequent hotlists based on profit tiers
+                        for i in range(1, NUMBER_OF_HOT_LISTS):
+                            if reward > cb + HOT_LIST_PROFIT_TIERS[i]:
+                                hot_lists[i][pid] = pname
+                                logger.info(f"HotList {i+1} ADD: {pname} (R:{reward:.3f} C:{cb:.3f} Profit > {HOT_LIST_PROFIT_TIERS[i]})")
+
+                    # For now, we'll just use the first hotlist. The other lists are created but not used yet.
+                    if hot_lists[0]:
+                        POOLS.clear(); POOLS.update(hot_lists[0])
                         pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
                         logger.info(f"Hot List ACTIVE with {len(POOLS)} pools: {list(POOLS.values())}")
                     else:
@@ -1593,7 +1591,7 @@ def main(force_mode: bool = False):
                             POOLS.update(POOLS_ORIGINAL)
                             pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
                     hot_list_created = True
-                    log_auction_state_to_file() # Log state after hotlist determination
+                    log_auction_state_to_file()
                                                             
                 is_early_bid_fetch_time = (early_bid_times_queue and 
                                         (early_bid_times_queue[0] - EARLY_BID_REWARD_FETCH_INTERVAL - 2 < time_to_auction_end <= early_bid_times_queue[0] + 5))

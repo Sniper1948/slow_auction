@@ -1374,86 +1374,18 @@ def main(force_mode: bool = False):
                                       (force_mode and 0 < time_to_auction_end)      
             
             if final_bid_window_active:
-                logger.info(f"Entering Final Bidding Phase (TTE: {time_to_auction_end:.2f}s). Monitored Pools: {list(POOLS.keys())}")
-                
-                pools_for_initial_batch_ids: List[str] = []
-                amounts_for_initial_batch_eth: List[float] = []
-                initial_batch_pre_bid_amounts: Dict[str, float] = {} 
+                logger.info(f"Entering Final Bidding Phase (TTE: {time_to_auction_end:.2f}s).")
 
-                for p_id, p_name in POOLS.items(): 
-                    current_tte_for_initial_check = AUCTION_END_TIME - datetime.datetime.now(datetime.timezone.utc).timestamp()
-                    if current_tte_for_initial_check <= MINIMUM_TTE_FOR_REACTION: 
-                        logger.debug(f"TTE {current_tte_for_initial_check:.3f}s too low, breaking from initial pool iteration for final bidding.")
-                        break 
-                    try:
-                        current_bidder_onchain, onchain_bid_amount = get_current_bid(w3_instance, silver_fees_contract_instance, p_id, timeout=0.2)
-                        reward = last_rewards.get(p_id) 
-                        if reward is None: 
-                            logger.warning(f"No cached reward for {p_name} in final bid (initial batch), skipping.")
-                            continue 
-                        
-                        is_my_contract_leading = (current_bidder_onchain == POOL_BIDDER_CONTRACT_ADDRESS)
-                        
-                        if is_my_contract_leading:
-                            if abs(highest_bids.get(p_id, {}).get("amount", 0.0) - onchain_bid_amount) > 1e-9 :
-                                highest_bids[p_id] = {"amount": onchain_bid_amount, "user": POOL_BIDDER_CONTRACT_ADDRESS, "tx_hash": highest_bids.get(p_id, {}).get("tx_hash", "on-chain-update-final")}
-                            logger.debug(f"Final Batch Prep: Skipping {p_name}, PoolBidder already leads with {onchain_bid_amount:.4f} $AG.")
-                            continue
+                def bid_thread_target(pool_id, bid_amount, urgency):
+                    place_bid_with_poolbidder(w3_instance, pool_bidder_contract_instance, bid_amount, pool_id, urgency)
 
-                        hypothetical_next_bid_by_contract = round(onchain_bid_amount + CONTRACT_DEFAULT_INCREMENT_AMOUNT, 8) if onchain_bid_amount > 0 else CONTRACT_DEFAULT_INCREMENT_AMOUNT
-                        if reward > hypothetical_next_bid_by_contract + FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN:
-                            logger.info(f"Final Batch Add: {p_name}. Profitable for auto +{CONTRACT_DEFAULT_INCREMENT_AMOUNT}AG (R:{reward:.3f} OnChain:{onchain_bid_amount:.3f})")
-                            pools_for_initial_batch_ids.append(p_id)
-                            amounts_for_initial_batch_eth.append(0.0) 
-                            initial_batch_pre_bid_amounts[p_id] = onchain_bid_amount 
-                        else:
-                            logger.debug(f"Skipping {p_name} from final batch: Reward {reward:.3f} not sufficient for auto +{CONTRACT_DEFAULT_INCREMENT_AMOUNT}AG (Hypothetical: {hypothetical_next_bid_by_contract:.3f} + margin {FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN:.3f})")
-                    except Exception as e_fb_pool_loop:
-                        logger.error(f"Error processing pool {p_name} in final bid initial batch prep: {e_fb_pool_loop}", exc_info=False)
-                
-                my_reactive_bids: Dict[str, float] = {} # For normal hyper-reactive mode
-                initial_batch_optimistic_bids: Dict[str, float] = {} # For dumb bidding mode seeding
-                batch_success = False # Initialize batch_success
-
-                if pools_for_initial_batch_ids:
-                    logger.info(f"Attempting initial final MULTI-BID for {len(pools_for_initial_batch_ids)} pools. Urgency: NORMAL")
-                    batch_success, batch_tx_hash = place_multiple_bids_with_poolbidder(
-                        w3_instance, pool_bidder_contract_instance,
-                        pools_for_initial_batch_ids, amounts_for_initial_batch_eth, # amounts_for_initial_batch_eth contains 0.0 for auto-increment
-                        urgency="NORMAL"
-                    )
-                    if batch_success and batch_tx_hash:
-                        logger.info(f"Initial Final MULTI-BID SUBMITTED. Tx: {batch_tx_hash}")
-                        for i_optimistic, p_id_succeeded in enumerate(pools_for_initial_batch_ids):
-                            pre_bid_amt = initial_batch_pre_bid_amounts.get(p_id_succeeded, 0.0)
-                            # If 0.0 was sent, contract aims for pre_bid_amt + increment.
-                            # If a specific amount was sent (not current use case for initial batch but for completeness), that's the amount.
-                            optimistic_amount_achieved = round(pre_bid_amt + CONTRACT_DEFAULT_INCREMENT_AMOUNT, 8) if amounts_for_initial_batch_eth[i_optimistic] == 0.0 else round(amounts_for_initial_batch_eth[i_optimistic], 8)
-                            
-                            highest_bids[p_id_succeeded] = {
-                                "amount": optimistic_amount_achieved, 
-                                "user": POOL_BIDDER_CONTRACT_ADDRESS,
-                                "tx_hash": batch_tx_hash
-                            }
-                            initial_batch_optimistic_bids[p_id_succeeded] = optimistic_amount_achieved
-                            # my_reactive_bids is populated later, only if not in DUMB_BIDDING_MODE
-                    else:
-                        logger.error(f"Initial Final MULTI-BID FAILED. Details: {batch_tx_hash if batch_tx_hash else 'No tx_hash / Pre-flight fail'}")
-                
-                # --- DUMB BIDDING MODE ---
-                if batch_success and initial_batch_optimistic_bids:
-                    logger.info(f"Initial bid successful, proceeding with threaded bidding.")
-
-                    def bid_thread_target(pool_id, bid_amount, urgency):
-                        place_bid_with_poolbidder(w3_instance, pool_bidder_contract_instance, bid_amount, pool_id, urgency)
-
-                    for i in range(NUMBER_OF_HOT_LISTS):
-                        hotlist = hot_lists[i]
-                        for p_id, p_name in hotlist.items():
-                                logger.info(f"Threaded Bid Add: {p_name} from hotlist {i+1}")
-                                bid_thread = threading.Thread(target=bid_thread_target, args=(p_id, 0.0, "URGENT"))
-                                bid_thread.start()
-                        time.sleep(THREAD_INTERVAL)
+                for i in range(NUMBER_OF_HOT_LISTS):
+                    hotlist = hot_lists[i]
+                    for p_id, p_name in hotlist.items():
+                            logger.info(f"Threaded Bid Add: {p_name} from hotlist {i+1}")
+                            bid_thread = threading.Thread(target=bid_thread_target, args=(p_id, 0.0, "URGENT"))
+                            bid_thread.start()
+                    time.sleep(THREAD_INTERVAL)
 
             if time_to_auction_end > TTE_THRESHOLD_BALANCE_CHECK and \
                (now_timestamp_utc - last_pb_bal_check_time >= 600):

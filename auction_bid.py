@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from threading import Lock
 
 # Script version
-SCRIPT_VERSION = "1.6.0" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.1" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -1265,6 +1265,8 @@ def main(force_mode: bool = False):
                 reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
                 continue
             
+            real_tte = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
+
             if SIMULATE_FINAL_WINDOW_MODE:
                 if not simulation_has_run: # Only set up and run the simulation once per script execution
                     if simulated_auction_end_time_override is None: # Initial setup for the single run
@@ -1286,7 +1288,6 @@ def main(force_mode: bool = False):
 
             # I just added this to ensure that the auction end time is updated if it has changed.
             # It will give a warning if there are sneaky auction timing change tricks
-            real_tte = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
             if (now_timestamp_utc - last_sync_check_time >= SYNC_CHECK_INTERVAL and
                 real_tte > TTE_THRESHOLD_SYNC_UPDATE and AUCTION_END_TIME is not None):
                 try:
@@ -1314,7 +1315,6 @@ def main(force_mode: bool = False):
 
             # Real auction end processing:
             # This should only happen based on the REAL AUCTION_END_TIME, not the simulated one.
-            real_tte = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME else float('inf')
 
             if real_tte < -1.5:
                 logger.info(f"REAL AUCTION_END_TIME ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Processing rewards and resetting.")

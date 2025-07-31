@@ -1437,7 +1437,7 @@ def main(force_mode: bool = False):
 
                     for p_id, p_name in POOLS_ORIGINAL.items():
                         reward = last_rewards.get(p_id)
-                        if reward is not None and reward > 0:
+                        if reward is not None and reward > EARLY_BID_FIXED_AMOUNT:
                             current_onchain_bid_amount = highest_bids.get(p_id, {}).get("amount", 0.0)
                             if current_onchain_bid_amount < EARLY_BID_FIXED_AMOUNT:
                                 if p_id in last_bids and EARLY_BID_FIXED_AMOUNT <= round(last_bids[p_id], 8):

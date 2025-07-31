@@ -1437,15 +1437,14 @@ def main(force_mode: bool = False):
 
                     for p_id, p_name in POOLS_ORIGINAL.items():
                         reward = last_rewards.get(p_id)
-                        if reward is not None and reward > EARLY_BID_FIXED_AMOUNT:
-                            current_onchain_bid_amount = highest_bids.get(p_id, {}).get("amount", 0.0)
-                            if current_onchain_bid_amount < EARLY_BID_FIXED_AMOUNT:
-                                if p_id in last_bids and EARLY_BID_FIXED_AMOUNT <= round(last_bids[p_id], 8):
-                                    logger.debug(f"Skipping {p_name} for early multi-bid: {EARLY_BID_FIXED_AMOUNT} AG is at or below last known failing bid {last_bids[p_id]:.4f}")
-                                    continue
-                                logger.info(f"Adding to early bird batch: {p_name} (Reward: {reward:.4f}), Bid: {EARLY_BID_FIXED_AMOUNT} $AG")
-                                pools_to_bid_ids.append(p_id)
-                                bid_amounts_for_pools.append(EARLY_BID_FIXED_AMOUNT)
+                        current_onchain_bid_amount = highest_bids.get(p_id, {}).get("amount", 0.0)
+                        if reward is not None and reward > current_onchain_bid_amount + CONTRACT_DEFAULT_INCREMENT_AMOUNT:
+                            if p_id in last_bids and current_onchain_bid_amount + CONTRACT_DEFAULT_INCREMENT_AMOUNT <= round(last_bids[p_id], 8):
+                                logger.debug(f"Skipping {p_name} for early multi-bid: {current_onchain_bid_amount + CONTRACT_DEFAULT_INCREMENT_AMOUNT} AG is at or below last known failing bid {last_bids[p_id]:.4f}")
+                                continue
+                            logger.info(f"Adding to early bird batch: {p_name} (Reward: {reward:.4f}), Bid: {current_onchain_bid_amount + CONTRACT_DEFAULT_INCREMENT_AMOUNT} $AG")
+                            pools_to_bid_ids.append(p_id)
+                            bid_amounts_for_pools.append(0.0)
                     
                     if pools_to_bid_ids: 
                         logger.info(f"Attempting multi-bid for {len(pools_to_bid_ids)} early bird pools.")

@@ -672,7 +672,7 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
     try:
         bid_wei = w3.to_wei(rounded_bid, 'ether')
         # gas_mult = 1.4 if urgency == "URGENT" else 1.25
-        gas_mult = {"URGENT": 1, "NORMAL": 1, "LOW": 1}.get(urgency, 1)# We don't want to spend much as we want to be last in the block
+        gas_mult = {"URGENT": 1.2, "NORMAL": 1, "LOW": 1}.get(urgency, 1)# We don't want to spend much as we want to be last in the block
         with nonce_lock:
             current_gas_price = w3.eth.gas_price
             tx_params = {
@@ -788,7 +788,7 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
             bid_amounts_wei = [w3.to_wei(round(amount, 8), 'ether') if amount != 0.0 else 0 for amount in bid_amounts_eth]
 
             #gas_mult = 1.45 if urgency == "URGENT" else 1.3
-            gas_mult = {"URGENT": 1, "NORMAL": 1, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
+            gas_mult = {"URGENT": 1.2, "NORMAL": 1, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
             current_gas_price = w3.eth.gas_price
             tx_params = {
                 'from': WALLET_ADDRESS,
@@ -797,19 +797,19 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
                 'chainId': 146
             }
 
-            base_gas_for_multibid = 150000
-            gas_per_internal_bid = 150000
+            base_gas_for_multibid = 200000
+            gas_per_internal_bid = 200000
             estimated_gas_dynamic = base_gas_for_multibid + (len(pool_ids) * gas_per_internal_bid)
 
             try:
                 estimated_gas_call = pb_contract.functions.bidOnMultiplePools(pool_ids, bid_amounts_wei).estimate_gas({'from': WALLET_ADDRESS, 'gasPrice': tx_params['gasPrice']})
-                tx_params['gas'] = int(estimated_gas_call * 1)
+                tx_params['gas'] = int(estimated_gas_call * 1.5)
                 logger.info(f"Estimated gas for PoolBidder.bidOnMultiplePools ({len(pool_ids)} pools): {tx_params['gas']} (price: {tx_params['gasPrice'] / 1e9:.2f} Gwei)")
             except Exception as e_gas_est:
                 logger.warning(f"Gas estimation failed for bidOnMultiplePools: {e_gas_est}. Using dynamic estimate: {estimated_gas_dynamic}")
-                tx_params['gas'] = int(estimated_gas_dynamic * 1)
+                tx_params['gas'] = int(estimated_gas_dynamic * 1.5)
                 if len(pool_ids) > 5:
-                    tx_params['gas'] = max(tx_params['gas'], 2000000)
+                    tx_params['gas'] = max(tx_params['gas'], 3000000)
 
             txn = pb_contract.functions.bidOnMultiplePools(pool_ids, bid_amounts_wei).build_transaction(tx_params)
             signed_txn = w3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
@@ -1240,6 +1240,23 @@ def main(force_mode: bool = False):
 
     #logger.info("POOL SUPREMACY BID ATTEMPTS STARTED")
     #attempt_pool_supremacy_bids(w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance)
+
+    initial_bid_pools = {
+        WS_EGGS_POOL: "WS-EGGS",
+        WS_WHALE_POOL: "WS-WHALE",
+        WS_ANON_POOL: "WS-ANON",
+        WS_SDIGGA_POOL: "WS-SDIGGA"
+    }
+
+    pools_to_bid_ids: List[str] = []
+    for pool_id, pool_name in initial_bid_pools.items():
+        user, bid_amt = get_current_bid(w3_instance, silver_fees_contract_instance, pool_id)
+        if bid_amt == 0:
+            pools_to_bid_ids.append(pool_id)
+            logger.info(f"Adding {pool_name} to initial bid list.")
+
+    if pools_to_bid_ids:
+        place_multiple_bids_with_poolbidder(w3_instance, pool_bidder_contract_instance, pools_to_bid_ids, [0.1] * len(pools_to_bid_ids), urgency="LOW")
 
     if force_mode: 
         event_scan_state.reset() 

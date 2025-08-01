@@ -681,19 +681,19 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
                 'gasPrice': int(current_gas_price * gas_mult),
                 'chainId': 146
             }
-        try:
-            estimated_gas = pb_contract.functions.bidOnPool(pool_id, bid_wei).estimate_gas({'from': WALLET_ADDRESS, 'gasPrice': tx_params['gasPrice']})
-            tx_params['gas'] = int(estimated_gas * 1.35) 
-            logger.info(f"Estimated gas for PoolBidder.bidOnPool on {pname}: {tx_params['gas']} (price: {tx_params['gasPrice'] / 1e9:.2f} Gwei)")
-        except Exception as e_gas_est:
-            logger.warning(f"Gas estimation failed for PoolBidder.bidOnPool on {pname}: {e_gas_est}. Using default 480k gas.")
-            tx_params['gas'] = 480000 
+            try:
+                estimated_gas = pb_contract.functions.bidOnPool(pool_id, bid_wei).estimate_gas({'from': WALLET_ADDRESS, 'gasPrice': tx_params['gasPrice']})
+                tx_params['gas'] = int(estimated_gas * 1.35)
+                logger.info(f"Estimated gas for PoolBidder.bidOnPool on {pname}: {tx_params['gas']} (price: {tx_params['gasPrice'] / 1e9:.2f} Gwei)")
+            except Exception as e_gas_est:
+                logger.warning(f"Gas estimation failed for PoolBidder.bidOnPool on {pname}: {e_gas_est}. Using default 480k gas.")
+                tx_params['gas'] = 480000
 
-        txn = pb_contract.functions.bidOnPool(pool_id, bid_wei).build_transaction(tx_params)
-        signed_txn = w3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
-        tx_hash_hex = tx_hash.hex() 
-        logger.info(f"SUCCESS: Bid via PoolBidder for {pname}: {rounded_bid:.4f} $AG. Tx: {tx_hash_hex}")
+            txn = pb_contract.functions.bidOnPool(pool_id, bid_wei).build_transaction(tx_params)
+            signed_txn = w3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+            tx_hash_hex = tx_hash.hex()
+            logger.info(f"SUCCESS: Bid via PoolBidder for {pname}: {rounded_bid:.4f} $AG. Tx: {tx_hash_hex}")
         
         bid_log_data.append({
             "Wallet Address": POOL_BIDDER_CONTRACT_ADDRESS,
@@ -784,36 +784,37 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
 
     tx_hash_hex = None 
     try:
-        bid_amounts_wei = [w3.to_wei(round(amount, 8), 'ether') if amount != 0.0 else 0 for amount in bid_amounts_eth]
-        
-        #gas_mult = 1.45 if urgency == "URGENT" else 1.3 
-        gas_mult = {"URGENT": 1, "NORMAL": 1, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
-        current_gas_price = w3.eth.gas_price
-        tx_params = {
-            'from': WALLET_ADDRESS, 
-            'nonce': w3.eth.get_transaction_count(WALLET_ADDRESS, 'pending'),
-            'gasPrice': int(current_gas_price * gas_mult), 
-            'chainId': 146
-        }
+        with nonce_lock:
+            bid_amounts_wei = [w3.to_wei(round(amount, 8), 'ether') if amount != 0.0 else 0 for amount in bid_amounts_eth]
 
-        base_gas_for_multibid = 150000 
-        gas_per_internal_bid = 150000    
-        estimated_gas_dynamic = base_gas_for_multibid + (len(pool_ids) * gas_per_internal_bid)
-        
-        try:
-            estimated_gas_call = pb_contract.functions.bidOnMultiplePools(pool_ids, bid_amounts_wei).estimate_gas({'from': WALLET_ADDRESS, 'gasPrice': tx_params['gasPrice']})
-            tx_params['gas'] = int(estimated_gas_call * 1) 
-            logger.info(f"Estimated gas for PoolBidder.bidOnMultiplePools ({len(pool_ids)} pools): {tx_params['gas']} (price: {tx_params['gasPrice'] / 1e9:.2f} Gwei)")
-        except Exception as e_gas_est:
-            logger.warning(f"Gas estimation failed for bidOnMultiplePools: {e_gas_est}. Using dynamic estimate: {estimated_gas_dynamic}")
-            tx_params['gas'] = int(estimated_gas_dynamic * 1) 
-            if len(pool_ids) > 5: 
-                 tx_params['gas'] = max(tx_params['gas'], 2000000)
+            #gas_mult = 1.45 if urgency == "URGENT" else 1.3
+            gas_mult = {"URGENT": 1, "NORMAL": 1, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
+            current_gas_price = w3.eth.gas_price
+            tx_params = {
+                'from': WALLET_ADDRESS,
+                'nonce': w3.eth.get_transaction_count(WALLET_ADDRESS, 'pending'),
+                'gasPrice': int(current_gas_price * gas_mult),
+                'chainId': 146
+            }
 
-        txn = pb_contract.functions.bidOnMultiplePools(pool_ids, bid_amounts_wei).build_transaction(tx_params)
-        signed_txn = w3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
-        tx_hash_hex = tx_hash.hex() 
+            base_gas_for_multibid = 150000
+            gas_per_internal_bid = 150000
+            estimated_gas_dynamic = base_gas_for_multibid + (len(pool_ids) * gas_per_internal_bid)
+
+            try:
+                estimated_gas_call = pb_contract.functions.bidOnMultiplePools(pool_ids, bid_amounts_wei).estimate_gas({'from': WALLET_ADDRESS, 'gasPrice': tx_params['gasPrice']})
+                tx_params['gas'] = int(estimated_gas_call * 1)
+                logger.info(f"Estimated gas for PoolBidder.bidOnMultiplePools ({len(pool_ids)} pools): {tx_params['gas']} (price: {tx_params['gasPrice'] / 1e9:.2f} Gwei)")
+            except Exception as e_gas_est:
+                logger.warning(f"Gas estimation failed for bidOnMultiplePools: {e_gas_est}. Using dynamic estimate: {estimated_gas_dynamic}")
+                tx_params['gas'] = int(estimated_gas_dynamic * 1)
+                if len(pool_ids) > 5:
+                    tx_params['gas'] = max(tx_params['gas'], 2000000)
+
+            txn = pb_contract.functions.bidOnMultiplePools(pool_ids, bid_amounts_wei).build_transaction(tx_params)
+            signed_txn = w3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+            tx_hash_hex = tx_hash.hex()
         
         logger.info(f"SUCCESS: Multi-bid via PoolBidder for {len(pool_ids)} pools. Tx: {tx_hash_hex}")
         

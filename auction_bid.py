@@ -682,7 +682,10 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
             }
             try:
                 estimated_gas = pb_contract.functions.bidOnPool(pool_id, bid_wei).estimate_gas({'from': WALLET_ADDRESS, 'gasPrice': tx_params['gasPrice']})
-                tx_params['gas'] = int(estimated_gas * 1.35)
+                calculated_gas = int(estimated_gas * 1.5) # Increased multiplier
+                tx_params['gas'] = max(120000, calculated_gas) # Enforce a minimum gas limit
+                if tx_params['gas'] == 120000 and calculated_gas < 120000:
+                    logger.info(f"Original estimated gas was low ({calculated_gas}), enforcing minimum of 120000.")
                 logger.info(f"Estimated gas for PoolBidder.bidOnPool on {pname}: {tx_params['gas']} (price: {tx_params['gasPrice'] / 1e9:.2f} Gwei)")
             except Exception as e_gas_est:
                 logger.warning(f"Gas estimation failed for PoolBidder.bidOnPool on {pname}: {e_gas_est}. Using default 480k gas.")
@@ -804,7 +807,10 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
 
             try:
                 estimated_gas_call = pb_contract.functions.bidOnMultiplePools(pool_ids, bid_amounts_wei).estimate_gas({'from': WALLET_ADDRESS, 'gasPrice': tx_params['gasPrice']})
-                tx_params['gas'] = int(estimated_gas_call * 1.5)
+                calculated_gas = int(estimated_gas_call * 1.75) # Increased multiplier
+                tx_params['gas'] = max(250000, calculated_gas) # Enforce a minimum gas limit
+                if tx_params['gas'] == 250000 and calculated_gas < 250000:
+                    logger.info(f"Original estimated gas was low ({calculated_gas}), enforcing minimum of 250000.")
                 logger.info(f"Estimated gas for PoolBidder.bidOnMultiplePools ({len(pool_ids)} pools): {tx_params['gas']} (price: {tx_params['gasPrice'] / 1e9:.2f} Gwei)")
             except Exception as e_gas_est:
                 logger.warning(f"Gas estimation failed for bidOnMultiplePools: {e_gas_est}. Using dynamic estimate: {estimated_gas_dynamic}")

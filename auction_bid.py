@@ -153,7 +153,7 @@ HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_
 NUMBER_OF_HOT_LISTS = 6 # Number of hotlists to create, we can increase this later
 HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] # Profit tiers for the hotlists
 
-FINAL_BID_WINDOW_START_TTE = 1.1 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
+FINAL_BID_WINDOW_START_TTE = 1.2 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
 
 # --- Hyper-Reactive Bidding Parameters ---
@@ -593,7 +593,7 @@ def attempt_pool_supremacy_bids(w3: Web3, sf_contract: Contract, pb_contract: Co
             
             logger.info(f"Supremacy: Adding {pool_name} to batch. Current bid: {onchain_bid_amount:.4f} by {current_bidder_str}. Reward: {reward:.4f}. Target bid: {target_bid_amount:.4f}")
             pools_to_target_ids.append(pool_id)
-            bid_amounts_for_target_pools.append(target_bid_amount)
+            bid_amounts_for_target_pools.append(0.0)
         else:
             logger.debug(f"Supremacy: Skipping {pool_name}. Reward {reward:.4f} not sufficient for target bid {target_bid_amount:.4f} + margin {required_profit_margin:.3f}")
 
@@ -672,7 +672,7 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
     try:
         bid_wei = w3.to_wei(rounded_bid, 'ether')
         # gas_mult = 1.4 if urgency == "URGENT" else 1.25
-        gas_mult = {"URGENT": 1.2, "NORMAL": 1, "LOW": 1}.get(urgency, 1)# We don't want to spend much as we want to be last in the block
+        gas_mult = {"URGENT": 2, "NORMAL": 1.1, "LOW": 1}.get(urgency, 1)
         with nonce_lock:
             current_gas_price = w3.eth.gas_price
             tx_params = {
@@ -784,11 +784,14 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
 
     tx_hash_hex = None 
     try:
+        if time.time() > AUCTION_END_TIME:
+            logger.warning("Auction has ended, skipping bid.")
+            return False, "Auction has ended"
         with nonce_lock:
             bid_amounts_wei = [w3.to_wei(round(amount, 8), 'ether') if amount != 0.0 else 0 for amount in bid_amounts_eth]
 
             #gas_mult = 1.45 if urgency == "URGENT" else 1.3
-            gas_mult = {"URGENT": 1.2, "NORMAL": 1, "LOW": 1}.get(urgency, 1) # We don't want to spend much as we want to be last in the block
+            gas_mult = {"URGENT": 2, "NORMAL": 1.1, "LOW": 1}.get(urgency, 1)
             current_gas_price = w3.eth.gas_price
             tx_params = {
                 'from': WALLET_ADDRESS,
@@ -1242,10 +1245,9 @@ def main(force_mode: bool = False):
     #attempt_pool_supremacy_bids(w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance)
 
     initial_bid_pools = {
+        WS_AG_POOL: "AG-WS",
         WS_EGGS_POOL: "WS-EGGS",
-        WS_WHALE_POOL: "WS-WHALE",
-        WS_ANON_POOL: "WS-ANON",
-        WS_SDIGGA_POOL: "WS-SDIGGA"
+        SCETH_WETH_POOL: "SCETH-WETH"
     }
 
     pools_to_bid_ids: List[str] = []
@@ -1256,7 +1258,7 @@ def main(force_mode: bool = False):
             logger.info(f"Adding {pool_name} to initial bid list.")
 
     if pools_to_bid_ids:
-        place_multiple_bids_with_poolbidder(w3_instance, pool_bidder_contract_instance, pools_to_bid_ids, [0.1] * len(pools_to_bid_ids), urgency="LOW")
+        place_multiple_bids_with_poolbidder(w3_instance, pool_bidder_contract_instance, pools_to_bid_ids, [0.0] * len(pools_to_bid_ids), urgency="LOW")
 
     if force_mode: 
         event_scan_state.reset() 

@@ -130,7 +130,7 @@ event_scanner_failed: bool = False
 POOLS_ORIGINAL: Dict[str, str] = {} # Populated at startup
 hot_list_created: bool = False
 last_bids: Dict[str, float] = {} # Tracks last attempted bid amount for a pool if it failed low
-EARLY_BID_TIMES_CONFIG = sorted([808, 132], reverse=True) # Original config
+EARLY_BID_TIMES_CONFIG = sorted([808, 50], reverse=True) # Original config
 early_bid_times_queue: List[int] = [] # Mutable queue for current auction cycle
 early_bids_processed_for_threshold: Dict[int, bool] = {} # Tracks if a threshold time has been processed
 last_reward_check_time: float = 0

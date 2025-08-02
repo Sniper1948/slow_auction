@@ -25,7 +25,7 @@ from threading import Lock
 nonce_lock = Lock()
 
 # Script version
-SCRIPT_VERSION = "1.6.1" # Integrated PoolBidder.sol contract and refined logic
+SCRIPT_VERSION = "1.6.2" # Integrated PoolBidder.sol contract and refined logic
 logging.basicConfig(
     level=logging.INFO, # Changed to INFO for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -1244,6 +1244,15 @@ def main(force_mode: bool = False):
     #logger.info("POOL SUPREMACY BID ATTEMPTS STARTED")
     #attempt_pool_supremacy_bids(w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance)
 
+    if force_mode:
+        event_scan_state.reset()
+        logger.info("Force mode activated. EventScanner state reset.")
+
+    last_pb_bal_check_time, last_bid_update_time, last_evt_scan_time = 0.0, 0.0, 0.0
+
+    try: reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
+    except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
+
     initial_bid_pools = {
         WS_AG_POOL: "AG-WS",
         WS_EGGS_POOL: "WS-EGGS",
@@ -1259,15 +1268,6 @@ def main(force_mode: bool = False):
 
     if pools_to_bid_ids:
         place_multiple_bids_with_poolbidder(w3_instance, pool_bidder_contract_instance, pools_to_bid_ids, [0.0] * len(pools_to_bid_ids), urgency="LOW")
-
-    if force_mode: 
-        event_scan_state.reset() 
-        logger.info("Force mode activated. EventScanner state reset.")
-
-    last_pb_bal_check_time, last_bid_update_time, last_evt_scan_time = 0.0, 0.0, 0.0
-    
-    try: reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
-    except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
 
     global current_auction_log_file # Ensure we're using the global
     if AUCTION_END_TIME:

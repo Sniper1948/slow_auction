@@ -1086,6 +1086,108 @@ def generate_wallet_statistics_report(reward_data: List[Dict[str, Any]]) -> str:
         
     return "\n".join(report_lines) + "\n"
 
+def generate_post_auction_winner_report(final_bids: Dict[str, Dict[str, Any]], final_rewards: List[Dict[str, Any]]) -> str:
+    """
+    Generates a comprehensive post-auction report including all winners and their stats,
+    formatted as specified by the user.
+    """
+    # --- 1. Data Processing ---
+
+    # Create a quick lookup map for rewards by pool_id for efficient access
+    rewards_map = {item['pool_id']: item.get('reward_agency', 0.0) for item in final_rewards}
+
+    # Initialize data structures for the two reports
+    winner_report_data = []
+    wallet_stats: Dict[str, Dict[str, Any]] = {}  # Format: {wallet_address: {"Auctions Won": 0, "Total Profit ($AG)": 0.0}}
+
+    # Sort pools by name for consistent report ordering
+    sorted_pools = sorted(POOLS_ORIGINAL.items(), key=lambda item: item[1])
+
+    for pool_id, pool_name in sorted_pools:
+        bid_info = final_bids.get(pool_id)
+
+        # Process only if there was a winning bid on the pool
+        if bid_info and bid_info.get("amount", 0.0) > 0 and bid_info.get("user") != "NO BIDDER":
+            winner_address = Web3.to_checksum_address(bid_info["user"])
+            bid_amount = bid_info["amount"]
+            reward_amount = rewards_map.get(pool_id, 0.0)
+            net_gain = reward_amount - bid_amount
+
+            # Append data for the detailed per-pool report
+            winner_report_data.append({
+                "Wallet ID": winner_address,
+                "Pool": pool_name,
+                "Bid Amount ($AG)": bid_amount,
+                "Reward Amount ($AG)": reward_amount,
+                "Net Gain ($AG)": net_gain,
+            })
+
+            # Initialize and update wallet statistics
+            if winner_address not in wallet_stats:
+                wallet_stats[winner_address] = {"Auctions Won": 0, "Total Profit ($AG)": 0.0}
+
+            wallet_stats[winner_address]["Auctions Won"] += 1
+            wallet_stats[winner_address]["Total Profit ($AG)"] += net_gain
+
+    # --- 2. Report Formatting ---
+
+    report_lines = []
+
+    # Table 1: Detailed Post-Auction Winner Report
+    headers1 = ["Wallet ID", "Pool", "Bid Amount ($AG)", "Reward Amount ($AG)", "Net Gain ($AG)"]
+    col_widths1 = [42, 12, 20, 23, 18]
+
+    report_lines.append("Post-Auction Winner Report:")
+    report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths1]) + "+")
+    report_lines.append(format_report_row(headers1, col_widths1))
+    report_lines.append("+" + "+".join(["=" * (w + 2) for w in col_widths1]) + "+")
+
+    if not winner_report_data:
+        no_data_row = ["No auction winners to report.", "", "", "", ""]
+        report_lines.append(format_report_row(no_data_row, col_widths1))
+        report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths1]) + "+")
+    else:
+        for entry in winner_report_data:
+            row_values = [
+                str(entry["Wallet ID"]),
+                str(entry["Pool"]),
+                f"{entry['Bid Amount ($AG)']:.4f}",
+                f"{entry['Reward Amount ($AG)']:.4f}",
+                f"{entry['Net Gain ($AG)']:.4f}",
+            ]
+            report_lines.append(format_report_row(row_values, col_widths1))
+            report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths1]) + "+")
+
+    report_lines.append("\n")  # Add a spacer between tables
+
+    # Table 2: Wallet Statistics Summary
+    headers2 = ["Wallet Address", "Auctions Won", "Total Profit ($AG)"]
+    col_widths2 = [42, 16, 22]
+
+    report_lines.append("Wallet Statistics:")
+    report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths2]) + "+")
+    report_lines.append(format_report_row(headers2, col_widths2))
+    report_lines.append("+" + "+".join(["=" * (w + 2) for w in col_widths2]) + "+")
+
+    if not wallet_stats:
+        no_stats_row = ["No wallet statistics to report.", "", ""]
+        report_lines.append(format_report_row(no_stats_row, col_widths2))
+        report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths2]) + "+")
+    else:
+        # Sort wallet statistics by total profit, descending
+        sorted_stats = sorted(wallet_stats.items(), key=lambda item: item[1]["Total Profit ($AG)"], reverse=True)
+
+        for wallet_id, stats in sorted_stats:
+            row_values = [
+                wallet_id,
+                str(stats["Auctions Won"]),
+                f"{stats['Total Profit ($AG)']:.4f}"
+            ]
+            report_lines.append(format_report_row(row_values, col_widths2))
+            report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths2]) + "+")
+
+    return "\n".join(report_lines) + "\n"
+
 # --- END REPORT GENERATION FUNCTIONS ---
 
 def log_auction_state_to_file():
@@ -1344,37 +1446,35 @@ def main(force_mode: bool = False):
             # This should only happen based on the REAL AUCTION_END_TIME, not the simulated one.
 
             if real_tte < -1.5:
-                logger.info(f"REAL AUCTION_END_TIME ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Processing rewards and resetting.")
+                logger.info(f"REAL AUCTION_END_TIME ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat() if AUCTION_END_TIME else 'N/A'}) is in the past (now: {now_datetime_utc.isoformat()}). Generating final report and resetting.")
                 if SIMULATE_FINAL_WINDOW_MODE and simulation_has_run:
                     logger.info("[SIMULATION] Note: Real auction cycle ended. Simulation was completed.")
 
-                for pool_id, pool_name in POOLS_ORIGINAL.items():
-                    final_bid_info = highest_bids.get(pool_id)
-                    if final_bid_info and final_bid_info.get("user") == POOL_BIDDER_CONTRACT_ADDRESS:
-                        bid_amount = final_bid_info.get("amount", 0.0)
-                        reward_amount = last_rewards.get(pool_id, 0.0)
-                        if reward_amount > 0:
-                            net_gain = round(reward_amount - bid_amount, 4)
-                            reward_summary_data.append({
-                                "Wallet ID": POOL_BIDDER_CONTRACT_ADDRESS, "Pool": pool_name,
-                                "Bid Amount ($AG)": bid_amount, "Reward Amount ($AG)": reward_amount,
-                                "Net Gain ($AG)": net_gain, "Note": "Standard"
-                            })
-                            logger.info(f"Reward Logged for {pool_name}: Bid {bid_amount:.4f}, Reward {reward_amount:.4f}, Net Gain {net_gain:.4f}")
+                # --- Final Data Fetch and Report Generation ---
+                logger.info("Fetching final on-chain bid data for all pools...")
+                update_bids_from_chain(w3_instance, silver_fees_contract_instance, POOLS_ORIGINAL)
                 
+                logger.info("Fetching final reward data for all pools...")
+                final_rewards_data = fetch_pool_rewards_data(silver_fees_contract_instance)
+
                 logger.info("--- Generating End-of-Cycle Reports ---")
+                # Generate the chronological bid log for our bidder's activities
                 bid_report_str = generate_bid_log_report(bid_log_data)
-                reward_summary_str = generate_reward_summary_report(reward_summary_data)
-                wallet_stats_str = generate_wallet_statistics_report(reward_summary_data)
+
+                # Generate the new, comprehensive winner report
+                final_winner_report_str = generate_post_auction_winner_report(highest_bids, final_rewards_data)
+
                 print("\n" + "="*100)
                 print("AUCTION CYCLE COMPLETED - REPORTS:")
                 print("="*100)
-                print(bid_report_str)
-                print(reward_summary_str)
-                print(wallet_stats_str)
+                print(final_winner_report_str) # Print the new report
+                print(bid_report_str) # Also print the detailed bid log
                 print("="*100 + "\n")
+
+                # Clear logs for the next cycle
                 bid_log_data.clear()
-                logger.info("Bid log for the completed cycle has been cleared. Reward summary is cumulative.")
+                reward_summary_data.clear() # Clearing this too, as it's no longer used for the main report
+                logger.info("Logs for the completed cycle have been cleared.")
                 
                 # Post-auction catch-up scan
                 if event_scanner:
@@ -1389,7 +1489,7 @@ def main(force_mode: bool = False):
                         logger.error(f"Post-auction catch-up scan failed: {e}")
 
                 reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
-                continue    
+                continue
 
             logger.debug(
                 f"TTE DEBUG: AUCTION_END_TIME={AUCTION_END_TIME:.4f} ({datetime.datetime.fromtimestamp(AUCTION_END_TIME, tz=datetime.timezone.utc).isoformat()}), "

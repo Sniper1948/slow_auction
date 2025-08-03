@@ -1362,7 +1362,7 @@ def main(force_mode: bool = False):
     initial_bid_pools = {
         WS_AG_POOL: "AG-WS",
         WS_EGGS_POOL: "WS-EGGS",
-        SCETH_WETH_POOL: "SCETH-WETH"
+        WS_SCETH_POOL: "WS-SCETH"
     }
 
     pools_to_bid_ids: List[str] = []

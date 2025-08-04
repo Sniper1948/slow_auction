@@ -139,6 +139,7 @@ current_auction_log_file: Optional[str] = None # Added for async logging
 # --- REPORTING DATA STRUCTURES ---
 bid_log_data: List[Dict[str, Any]] = []
 reward_summary_data: List[Dict[str, Any]] = []
+gas_usage_data: List[Dict[str, Any]] = []
 # Wallet statistics will be derived from reward_summary_data
 
 # --- BIDDING STRATEGY PARAMETERS ---
@@ -705,6 +706,11 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
             "Tx Hash (Short)": tx_hash_hex[:12] + ".." if tx_hash_hex else "N/A"
         })
 
+        if tx_hash_hex:
+            tx_details = get_transaction_details(w3, tx_hash_hex)
+            if tx_details:
+                gas_usage_data.append(tx_details)
+
         last_bids.pop(pool_id, None) 
         return True, tx_hash_hex
     except ContractLogicError as e_logic:
@@ -838,7 +844,13 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
                 "Bid Amount ($AG)": logged_bid_amount, 
                 "Tx Hash (Short)": tx_hash_short 
             })
-            last_bids.pop(pool_id, None) 
+            last_bids.pop(pool_id, None)
+
+        if tx_hash_hex:
+            tx_details = get_transaction_details(w3, tx_hash_hex)
+            if tx_details:
+                gas_usage_data.append(tx_details)
+
         return True, tx_hash_hex
         
     except ContractLogicError as e_logic:
@@ -932,6 +944,32 @@ def get_block_number_for_target_timestamp(
         return None
 
 # --- END BLOCK NUMBER ESTIMATION ---
+
+def get_transaction_details(w3: Web3, tx_hash: str) -> Optional[Dict[str, Any]]:
+    try:
+        tx = w3.eth.get_transaction(tx_hash)
+        tx_receipt = w3.eth.get_transaction_receipt(tx_hash)
+        if tx is None or tx_receipt is None:
+            return None
+
+        gas_used = tx_receipt['gasUsed']
+        gas_price = tx['gasPrice']
+        tx_cost_wei = gas_used * gas_price
+        tx_cost_eth = w3.from_wei(tx_cost_wei, 'ether')
+
+        block = w3.eth.get_block(tx['blockNumber'])
+        timestamp = datetime.datetime.fromtimestamp(block['timestamp'], tz=datetime.timezone.utc)
+
+        return {
+            "tx_hash": tx_hash,
+            "timestamp": timestamp,
+            "gas_used": gas_used,
+            "gas_price_gwei": w3.from_wei(gas_price, 'gwei'),
+            "tx_cost_eth": tx_cost_eth
+        }
+    except Exception as e:
+        logger.error(f"Error getting transaction details for {tx_hash}: {e}")
+        return None
 
 # --- REPORT GENERATION FUNCTIONS ---
 
@@ -1084,6 +1122,41 @@ def generate_wallet_statistics_report(reward_data: List[Dict[str, Any]]) -> str:
         report_lines.append(format_report_row(row_values, col_widths))
         report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
         
+    return "\n".join(report_lines) + "\n"
+
+def generate_gas_usage_report(data: List[Dict[str, Any]]) -> str:
+    """Generates the Gas Usage report string."""
+    if not data:
+        return "Gas Usage Report:\nNo gas usage data to report for this cycle.\n"
+
+    headers = ["Timestamp (UTC)", "Tx Hash", "Gas Used", "Gas Price (GWEI)", "Tx Cost (S)"]
+    col_widths = [26, 66, 10, 18, 18]
+
+    report_lines = ["Gas Usage Report:"]
+    report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
+    report_lines.append(format_report_row(headers, col_widths))
+    report_lines.append("+" + "+".join(["=" * (w + 2) for w in col_widths]) + "+")
+
+    total_gas_used = 0
+    total_tx_cost_eth = 0.0
+
+    for entry in data:
+        row_values = [
+            entry["timestamp"].strftime('%Y-%m-%d %H:%M:%S'),
+            entry["tx_hash"],
+            str(entry["gas_used"]),
+            f"{entry['gas_price_gwei']:.2f}",
+            f"{entry['tx_cost_eth']:.8f}",
+        ]
+        report_lines.append(format_report_row(row_values, col_widths))
+        report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
+        total_gas_used += entry["gas_used"]
+        total_tx_cost_eth += entry["tx_cost_eth"]
+
+    report_lines.append(f"| Total Gas Used: {total_gas_used}".ljust(col_widths[0] + 3) +
+                        f"| Total Tx Cost (S): {total_tx_cost_eth:.8f}".ljust(col_widths[1] + 3) + "|")
+    report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
+
     return "\n".join(report_lines) + "\n"
 
 def generate_post_auction_winner_report(final_bids: Dict[str, Dict[str, Any]], final_rewards: List[Dict[str, Any]]) -> str:
@@ -1360,9 +1433,8 @@ def main(force_mode: bool = False):
     except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
 
     initial_bid_pools = {
-        WS_AG_POOL: "AG-WS",
+        WS_WHALE_POOL: "WS-WHALE",
         WS_EGGS_POOL: "WS-EGGS",
-        WS_SCETH_POOL: "WS-SCETH"
     }
 
     pools_to_bid_ids: List[str] = []
@@ -1461,6 +1533,9 @@ def main(force_mode: bool = False):
                 # Generate the chronological bid log for our bidder's activities
                 bid_report_str = generate_bid_log_report(bid_log_data)
 
+                # Generate the gas usage report
+                gas_usage_report_str = generate_gas_usage_report(gas_usage_data)
+
                 # Generate the new, comprehensive winner report
                 final_winner_report_str = generate_post_auction_winner_report(highest_bids, final_rewards_data)
 
@@ -1469,11 +1544,13 @@ def main(force_mode: bool = False):
                 print("="*100)
                 print(final_winner_report_str) # Print the new report
                 print(bid_report_str) # Also print the detailed bid log
+                print(gas_usage_report_str) # Also print the gas usage log
                 print("="*100 + "\n")
 
                 # Clear logs for the next cycle
                 bid_log_data.clear()
                 reward_summary_data.clear() # Clearing this too, as it's no longer used for the main report
+                gas_usage_data.clear()
                 logger.info("Logs for the completed cycle have been cleared.")
                 
                 # Post-auction catch-up scan

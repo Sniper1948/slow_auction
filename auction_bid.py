@@ -1433,8 +1433,8 @@ def main(force_mode: bool = False):
     except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
 
     initial_bid_pools = {
-        WS_WHALE_POOL: "WS-WHALE",
-        WS_EGGS_POOL: "WS-EGGS",
+        # WS_WHALE_POOL: "WS-WHALE",
+        WS_EGGS_POOL: "WS-EGGS"
     }
 
     pools_to_bid_ids: List[str] = []

@@ -65,6 +65,7 @@ class TestBidding(unittest.TestCase):
                 "status": "1",
                 "result": [
                     {
+                        "from": "0xb46e0226c5cb834ef6fe7492cf37d70f8cee62f2",
                         "to": "0xc3e38729d53e3830ab7365589a0a28cd73522bae",
                         "input": "0x78d13d66",
                         "hash": "0x456"
@@ -74,7 +75,7 @@ class TestBidding(unittest.TestCase):
             mock_get.return_value = mock_response
             mock_get_transaction_details.return_value = {
                 "tx_hash": "0x456",
-                "timestamp": "2025-08-05 02:10:45.727887",
+                "timestamp": "2025-08-05 04:26:19.411982",
                 "gas_used": 21000,
                 "gas_price_gwei": 55,
                 "tx_cost_eth": 0.001155

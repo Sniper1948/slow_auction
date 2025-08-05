@@ -59,7 +59,7 @@ SONIC_RPC_URLS = [
 ]
 
 # Etherscan API
-ETHERSCAN_API_KEY = "3FND3CX9Y894229SFZI4VRB873F4IX61NH"
+ETHERSCAN_API_KEY = "NZNGTV5TX9WWFPSYGI7MZK9DFBAK74M3ZE"
 
 # Addresses
 SILVER_FEES_CONTRACT_ADDRESS = Web3.to_checksum_address("0xfeE899CF3Ef6FCf338Da86453c334973e015c236")
@@ -976,32 +976,44 @@ def get_transaction_details(w3: Web3, tx_hash: str) -> Optional[Dict[str, Any]]:
 
 def fetch_historical_bids(w3: Web3, wallet_address: str, contract_address: str, method_id: str):
     logger.info(f"Fetching historical bids for {wallet_address} on contract {contract_address}")
-    try:
-        url = f"https://api.etherscan.io/api?module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&sort=asc&apikey={ETHERSCAN_API_KEY}"
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
+    page = 1
+    offset = 100
+    all_bids = []
 
-        if data["status"] == "1":
-            for tx in data["result"]:
-                if tx["to"].lower() == contract_address.lower() and tx["input"].startswith(method_id):
-                    tx_details = get_transaction_details(w3, tx["hash"])
-                    if tx_details:
-                        # Check for duplicates before appending
-                        is_duplicate = False
-                        for existing_tx in gas_usage_data:
-                            if existing_tx["tx_hash"] == tx_details["tx_hash"]:
-                                is_duplicate = True
-                                break
-                        if not is_duplicate:
-                            gas_usage_data.append(tx_details)
-            logger.info(f"Found and processed {len(gas_usage_data)} historical bid transactions.")
-        else:
-            logger.error(f"Etherscan API error: {data['message']}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching data from Etherscan: {e}")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred in fetch_historical_bids: {e}")
+    while True:
+        try:
+            url = f"https://api.etherscan.io/v2/api?chainid=146&module=account&action=txlist&address={contract_address}&startblock=0&endblock=99999999&page={page}&offset={offset}&sort=asc&apikey={ETHERSCAN_API_KEY}"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if data['status'] == '1':
+                transactions = data['result']
+                logger.info(f"Page {page}: Retrieved {len(transactions)} transactions")
+
+                for tx in transactions:
+                    if tx["from"].lower() == wallet_address.lower() and tx['input'].startswith(method_id):
+                        tx_details = get_transaction_details(w3, tx["hash"])
+                        if tx_details:
+                            is_duplicate = any(existing_tx["tx_hash"] == tx_details["tx_hash"] for existing_tx in gas_usage_data)
+                            if not is_duplicate:
+                                gas_usage_data.append(tx_details)
+
+                if len(transactions) < offset:
+                    break
+                page += 1
+            else:
+                logger.error(f"Etherscan API error: {data['message']}")
+                break
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed: {e}")
+            break
+        except Exception as e:
+            logger.error(f"An unexpected error occurred in fetch_historical_bids: {e}")
+            break
+
+    logger.info(f"Found and processed {len(gas_usage_data)} historical bid transactions.")
 
 # --- REPORT GENERATION FUNCTIONS ---
 
@@ -1468,7 +1480,6 @@ def main(force_mode: bool = False):
     except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
 
     initial_bid_pools = {
-        WS_WHALE_POOL: "WS-WHALE",
         WS_EGGS_POOL: "WS-EGGS",
     }
 

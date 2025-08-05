@@ -58,6 +58,9 @@ SONIC_RPC_URLS = [
     "https://sonic-rpc.publicnode.com:443"
 ]
 
+# Etherscan API
+ETHERSCAN_API_KEY = "3FND3CX9Y894229SFZI4VRB873F4IX61NH"
+
 # Addresses
 SILVER_FEES_CONTRACT_ADDRESS = Web3.to_checksum_address("0xfeE899CF3Ef6FCf338Da86453c334973e015c236")
 NFT_POSITION_MANAGER_ADDRESS = Web3.to_checksum_address("0x5084E9fDF9264489A14E77C011073D757E572bB4")
@@ -971,6 +974,35 @@ def get_transaction_details(w3: Web3, tx_hash: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error getting transaction details for {tx_hash}: {e}")
         return None
 
+def fetch_historical_bids(w3: Web3, wallet_address: str, contract_address: str, method_id: str):
+    logger.info(f"Fetching historical bids for {wallet_address} on contract {contract_address}")
+    try:
+        url = f"https://api.etherscan.io/api?module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&sort=asc&apikey={ETHERSCAN_API_KEY}"
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+
+        if data["status"] == "1":
+            for tx in data["result"]:
+                if tx["to"].lower() == contract_address.lower() and tx["input"].startswith(method_id):
+                    tx_details = get_transaction_details(w3, tx["hash"])
+                    if tx_details:
+                        # Check for duplicates before appending
+                        is_duplicate = False
+                        for existing_tx in gas_usage_data:
+                            if existing_tx["tx_hash"] == tx_details["tx_hash"]:
+                                is_duplicate = True
+                                break
+                        if not is_duplicate:
+                            gas_usage_data.append(tx_details)
+            logger.info(f"Found and processed {len(gas_usage_data)} historical bid transactions.")
+        else:
+            logger.error(f"Etherscan API error: {data['message']}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching data from Etherscan: {e}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in fetch_historical_bids: {e}")
+
 # --- REPORT GENERATION FUNCTIONS ---
 
 def format_report_row(row_data: List[str], column_widths: List[int]) -> str:
@@ -1420,6 +1452,9 @@ def main(force_mode: bool = False):
             raise ValueError("Wallet address in .env does not match private key for PoolBidder owner.")
     except Exception as e: logger.critical(f"Private key/Wallet validation error: {e}"); return
 
+    # Fetch historical bids
+    fetch_historical_bids(w3_instance, "0xb46e0226c5cb834ef6fe7492cf37d70f8cee62f2", "0xC3e38729d53E3830Ab7365589A0A28cD73522BAE", "0x78d13d66")
+
     #logger.info("POOL SUPREMACY BID ATTEMPTS STARTED")
     #attempt_pool_supremacy_bids(w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance)
 
@@ -1433,8 +1468,8 @@ def main(force_mode: bool = False):
     except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
 
     initial_bid_pools = {
-        # WS_WHALE_POOL: "WS-WHALE",
-        WS_EGGS_POOL: "WS-EGGS"
+        WS_WHALE_POOL: "WS-WHALE",
+        WS_EGGS_POOL: "WS-EGGS",
     }
 
     pools_to_bid_ids: List[str] = []

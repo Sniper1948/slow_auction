@@ -56,5 +56,36 @@ class TestBidding(unittest.TestCase):
             self.assertEqual(tx_hash, '0x123')
             mock_get_transaction_details.assert_called_once_with(w3_instance, '0x123')
 
+    def test_fetch_historical_bids(self):
+        with patch('auction_bid.requests.get') as mock_get, \
+             patch('auction_bid.get_transaction_details') as mock_get_transaction_details:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "status": "1",
+                "result": [
+                    {
+                        "to": "0xc3e38729d53e3830ab7365589a0a28cd73522bae",
+                        "input": "0x78d13d66",
+                        "hash": "0x456"
+                    }
+                ]
+            }
+            mock_get.return_value = mock_response
+            mock_get_transaction_details.return_value = {
+                "tx_hash": "0x456",
+                "timestamp": "2025-08-05 02:10:45.727887",
+                "gas_used": 21000,
+                "gas_price_gwei": 55,
+                "tx_cost_eth": 0.001155
+            }
+
+            from auction_bid import fetch_historical_bids, gas_usage_data
+            gas_usage_data.clear()
+            fetch_historical_bids(w3_instance, "0xb46e0226c5cb834ef6fe7492cf37d70f8cee62f2", "0xC3e38729d53E3830Ab7365589A0A28cD73522BAE", "0x78d13d66")
+            self.assertEqual(len(gas_usage_data), 1)
+            self.assertEqual(gas_usage_data[0]["tx_hash"], "0x456")
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -157,14 +157,14 @@ HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_
 NUMBER_OF_HOT_LISTS = 6 # Number of hotlists to create, we can increase this later
 HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] # Profit tiers for the hotlists
 
-FINAL_BID_WINDOW_START_TTE = 1.2 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
+FINAL_BID_WINDOW_START_TTE = 1 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
 
 # --- Hyper-Reactive Bidding Parameters ---
 MINIMUM_TTE_FOR_REACTION = 0.15  # Minimum TTE (seconds) to continue reactive bidding. Below this, likely too late.
 HYPER_REACTIVE_CHECK_INTERVAL = 0.02 # Sleep interval (seconds) between full check cycles of reactive pools.
 GET_CURRENT_BID_TIMEOUT_HYPER = 0.05 # Timeout (seconds) for get_current_bid in hyper-reactive mode (50ms).
-THREAD_INTERVAL = 0.2 # Interval between each bid thread
+THREAD_INTERVAL = 0.1 # Interval between each bid thread
 
 # --- Task Skipping TTE Thresholds (to ensure responsiveness for final window) ---
 TTE_THRESHOLD_BALANCE_CHECK = 5.0 # Skip balance check if TTE < 5.0s
@@ -949,30 +949,35 @@ def get_block_number_for_target_timestamp(
 # --- END BLOCK NUMBER ESTIMATION ---
 
 def get_transaction_details(w3: Web3, tx_hash: str) -> Optional[Dict[str, Any]]:
-    try:
-        tx = w3.eth.get_transaction(tx_hash)
-        tx_receipt = w3.eth.get_transaction_receipt(tx_hash)
-        if tx is None or tx_receipt is None:
-            return None
+    for i in range(5):
+        try:
+            tx = w3.eth.get_transaction(tx_hash)
+            tx_receipt = w3.eth.get_transaction_receipt(tx_hash)
+            if tx is not None and tx_receipt is not None:
+                gas_used = tx_receipt['gasUsed']
+                gas_price = tx['gasPrice']
+                tx_cost_wei = gas_used * gas_price
+                tx_cost_eth = w3.from_wei(tx_cost_wei, 'ether')
 
-        gas_used = tx_receipt['gasUsed']
-        gas_price = tx['gasPrice']
-        tx_cost_wei = gas_used * gas_price
-        tx_cost_eth = w3.from_wei(tx_cost_wei, 'ether')
+                block = w3.eth.get_block(tx['blockNumber'])
+                timestamp = datetime.datetime.fromtimestamp(block['timestamp'], tz=datetime.timezone.utc)
 
-        block = w3.eth.get_block(tx['blockNumber'])
-        timestamp = datetime.datetime.fromtimestamp(block['timestamp'], tz=datetime.timezone.utc)
-
-        return {
-            "tx_hash": tx_hash,
-            "timestamp": timestamp,
-            "gas_used": gas_used,
-            "gas_price_gwei": w3.from_wei(gas_price, 'gwei'),
-            "tx_cost_eth": tx_cost_eth
-        }
-    except Exception as e:
-        logger.error(f"Error getting transaction details for {tx_hash}: {e}")
-        return None
+                return {
+                    "tx_hash": tx_hash,
+                    "timestamp": timestamp,
+                    "gas_used": gas_used,
+                    "gas_price_gwei": w3.from_wei(gas_price, 'gwei'),
+                    "tx_cost_eth": tx_cost_eth
+                }
+        except Exception as e:
+            if "not found" in str(e).lower():
+                logger.warning(f"Transaction {tx_hash} not found, retrying in 2 seconds...")
+                time.sleep(2)
+            else:
+                logger.error(f"Error getting transaction details for {tx_hash}: {e}")
+                return None
+    logger.error(f"Failed to get transaction details for {tx_hash} after multiple retries.")
+    return None
 
 def fetch_historical_bids(w3: Web3, wallet_address: str, contract_address: str, method_id: str):
     logger.info(f"Fetching historical bids for {wallet_address} on contract {contract_address}")
@@ -1195,7 +1200,7 @@ def generate_gas_usage_report(data: List[Dict[str, Any]]) -> str:
         report_lines.append(format_report_row(row_values, col_widths))
         report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
         total_gas_used += entry["gas_used"]
-        total_tx_cost_eth += entry["tx_cost_eth"]
+        total_tx_cost_eth += float(entry["tx_cost_eth"])
 
     report_lines.append(f"| Total Gas Used: {total_gas_used}".ljust(col_widths[0] + 3) +
                         f"| Total Tx Cost (S): {total_tx_cost_eth:.8f}".ljust(col_widths[1] + 3) + "|")

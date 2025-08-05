@@ -87,6 +87,16 @@ class TestBidding(unittest.TestCase):
             self.assertEqual(len(gas_usage_data), 1)
             self.assertEqual(gas_usage_data[0]["tx_hash"], "0x456")
 
+    def test_get_transaction_details_retry(self):
+        with patch('auction_bid.w3_instance.eth') as mock_eth, \
+             patch('time.sleep') as mock_sleep:
+            mock_eth.get_transaction.side_effect = [Exception("not found"), Exception("not found"), MagicMock()]
+            mock_eth.get_transaction_receipt.side_effect = [Exception("not found"), Exception("not found"), MagicMock()]
+
+            from auction_bid import get_transaction_details
+            get_transaction_details(w3_instance, "0x789")
+            self.assertEqual(mock_sleep.call_count, 3)
+
 
 if __name__ == '__main__':
     unittest.main()

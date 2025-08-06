@@ -979,7 +979,7 @@ def get_transaction_details(w3: Web3, tx_hash: str) -> Optional[Dict[str, Any]]:
     logger.error(f"Failed to get transaction details for {tx_hash} after multiple retries.")
     return None
 
-def fetch_historical_bids(w3: Web3, wallet_address: str, contract_address: str, method_id: str):
+def fetch_historical_bids(w3: Web3, wallet_address: str, contract_address: str, method_id: str, start_timestamp: int, end_timestamp: int):
     logger.info(f"Fetching historical bids for {wallet_address} on contract {contract_address}")
     page = 1
     offset = 100
@@ -997,7 +997,8 @@ def fetch_historical_bids(w3: Web3, wallet_address: str, contract_address: str, 
                 logger.info(f"Page {page}: Retrieved {len(transactions)} transactions")
 
                 for tx in transactions:
-                    if tx["from"].lower() == wallet_address.lower() and tx['input'].startswith(method_id):
+                    tx_timestamp = int(tx['timeStamp'])
+                    if tx["from"].lower() == wallet_address.lower() and tx['input'].startswith(method_id) and start_timestamp <= tx_timestamp <= end_timestamp:
                         tx_details = get_transaction_details(w3, tx["hash"])
                         if tx_details:
                             is_duplicate = any(existing_tx["tx_hash"] == tx_details["tx_hash"] for existing_tx in gas_usage_data)
@@ -1470,7 +1471,10 @@ def main(force_mode: bool = False):
     except Exception as e: logger.critical(f"Private key/Wallet validation error: {e}"); return
 
     # Fetch historical bids
-    fetch_historical_bids(w3_instance, "0xb46e0226c5cb834ef6fe7492cf37d70f8cee62f2", "0xC3e38729d53E3830Ab7365589A0A28cD73522BAE", "0x78d13d66")
+    if AUCTION_END_TIME:
+        start_timestamp = int(AUCTION_END_TIME - (12 * 3600) + 600)
+        end_timestamp = int(AUCTION_END_TIME + 2)
+        fetch_historical_bids(w3_instance, "0xb46e0226c5cb834ef6fe7492cf37d70f8cee62f2", "0xC3e38729d53E3830Ab7365589A0A28cD73522BAE", "0x78d13d66", start_timestamp, end_timestamp)
 
     #logger.info("POOL SUPREMACY BID ATTEMPTS STARTED")
     #attempt_pool_supremacy_bids(w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance)
@@ -1810,7 +1814,7 @@ def main(force_mode: bool = False):
                     actual_tte_for_scan_decision = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME and not (SIMULATE_FINAL_WINDOW_MODE and simulated_auction_end_time_override is not None and (simulated_auction_end_time_override - now_timestamp_utc) > 0) else time_to_auction_end
 
                     if actual_tte_for_scan_decision < TTE_FOR_REDUCED_SCAN_RANGE:
-                        max_permissible_to_block = current_from_block + MAX_BLOCKS_PER_SCAN_LOW_TTE
+                        max_permissible_to_block = current_from_block + MAX_BLOCKS_PER_SCAN__TTE
                         if to_block > max_permissible_to_block: # Only reduce if current to_block is larger
                             to_block = max_permissible_to_block
                             logger.debug(f"Low TTE ({actual_tte_for_scan_decision:.2f}s): Event scan range reduced. New to_block: {to_block} (Original: {to_block_original})")

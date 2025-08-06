@@ -58,9 +58,6 @@ SONIC_RPC_URLS = [
     "https://sonic-rpc.publicnode.com:443"
 ]
 
-# Etherscan API
-ETHERSCAN_API_KEY = "NZNGTV5TX9WWFPSYGI7MZK9DFBAK74M3ZE"
-
 # Addresses
 SILVER_FEES_CONTRACT_ADDRESS = Web3.to_checksum_address("0xfeE899CF3Ef6FCf338Da86453c334973e015c236")
 NFT_POSITION_MANAGER_ADDRESS = Web3.to_checksum_address("0x5084E9fDF9264489A14E77C011073D757E572bB4")
@@ -142,7 +139,6 @@ current_auction_log_file: Optional[str] = None # Added for async logging
 # --- REPORTING DATA STRUCTURES ---
 bid_log_data: List[Dict[str, Any]] = []
 reward_summary_data: List[Dict[str, Any]] = []
-gas_usage_data: List[Dict[str, Any]] = []
 # Wallet statistics will be derived from reward_summary_data
 
 # --- BIDDING STRATEGY PARAMETERS ---
@@ -157,14 +153,14 @@ HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_
 NUMBER_OF_HOT_LISTS = 6 # Number of hotlists to create, we can increase this later
 HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] # Profit tiers for the hotlists
 
-FINAL_BID_WINDOW_START_TTE = 1 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
+FINAL_BID_WINDOW_START_TTE = 1.2 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
 
 # --- Hyper-Reactive Bidding Parameters ---
 MINIMUM_TTE_FOR_REACTION = 0.15  # Minimum TTE (seconds) to continue reactive bidding. Below this, likely too late.
 HYPER_REACTIVE_CHECK_INTERVAL = 0.02 # Sleep interval (seconds) between full check cycles of reactive pools.
 GET_CURRENT_BID_TIMEOUT_HYPER = 0.05 # Timeout (seconds) for get_current_bid in hyper-reactive mode (50ms).
-THREAD_INTERVAL = 0.1 # Interval between each bid thread
+THREAD_INTERVAL = 0.2 # Interval between each bid thread
 
 # --- Task Skipping TTE Thresholds (to ensure responsiveness for final window) ---
 TTE_THRESHOLD_BALANCE_CHECK = 5.0 # Skip balance check if TTE < 5.0s
@@ -709,11 +705,6 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
             "Tx Hash (Short)": tx_hash_hex[:12] + ".." if tx_hash_hex else "N/A"
         })
 
-        if tx_hash_hex:
-            tx_details = get_transaction_details(w3, tx_hash_hex)
-            if tx_details:
-                gas_usage_data.append(tx_details)
-
         last_bids.pop(pool_id, None) 
         return True, tx_hash_hex
     except ContractLogicError as e_logic:
@@ -848,12 +839,6 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
                 "Tx Hash (Short)": tx_hash_short 
             })
             last_bids.pop(pool_id, None)
-
-        if tx_hash_hex:
-            tx_details = get_transaction_details(w3, tx_hash_hex)
-            if tx_details:
-                gas_usage_data.append(tx_details)
-
         return True, tx_hash_hex
         
     except ContractLogicError as e_logic:
@@ -947,79 +932,6 @@ def get_block_number_for_target_timestamp(
         return None
 
 # --- END BLOCK NUMBER ESTIMATION ---
-
-def get_transaction_details(w3: Web3, tx_hash: str) -> Optional[Dict[str, Any]]:
-    for i in range(5):
-        try:
-            tx = w3.eth.get_transaction(tx_hash)
-            tx_receipt = w3.eth.get_transaction_receipt(tx_hash)
-            if tx is not None and tx_receipt is not None:
-                gas_used = tx_receipt['gasUsed']
-                gas_price = tx['gasPrice']
-                tx_cost_wei = gas_used * gas_price
-                tx_cost_eth = w3.from_wei(tx_cost_wei, 'ether')
-
-                block = w3.eth.get_block(tx['blockNumber'])
-                timestamp = datetime.datetime.fromtimestamp(block['timestamp'], tz=datetime.timezone.utc)
-
-                return {
-                    "tx_hash": tx_hash,
-                    "timestamp": timestamp,
-                    "gas_used": gas_used,
-                    "gas_price_gwei": w3.from_wei(gas_price, 'gwei'),
-                    "tx_cost_eth": tx_cost_eth
-                }
-        except Exception as e:
-            if "not found" in str(e).lower():
-                logger.warning(f"Transaction {tx_hash} not found, retrying in 2 seconds...")
-                time.sleep(2)
-            else:
-                logger.error(f"Error getting transaction details for {tx_hash}: {e}")
-                return None
-    logger.error(f"Failed to get transaction details for {tx_hash} after multiple retries.")
-    return None
-
-def fetch_historical_bids(w3: Web3, wallet_address: str, contract_address: str, method_id: str, start_timestamp: int, end_timestamp: int):
-    logger.info(f"Fetching historical bids for {wallet_address} on contract {contract_address}")
-    page = 1
-    offset = 100
-    all_bids = []
-
-    while True:
-        try:
-            url = f"https://api.etherscan.io/v2/api?chainid=146&module=account&action=txlist&address={contract_address}&startblock=0&endblock=99999999&page={page}&offset={offset}&sort=asc&apikey={ETHERSCAN_API_KEY}"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if data['status'] == '1':
-                transactions = data['result']
-                logger.info(f"Page {page}: Retrieved {len(transactions)} transactions")
-
-                for tx in transactions:
-                    tx_timestamp = int(tx['timeStamp'])
-                    if tx["from"].lower() == wallet_address.lower() and tx['input'].startswith(method_id) and start_timestamp <= tx_timestamp <= end_timestamp:
-                        tx_details = get_transaction_details(w3, tx["hash"])
-                        if tx_details:
-                            is_duplicate = any(existing_tx["tx_hash"] == tx_details["tx_hash"] for existing_tx in gas_usage_data)
-                            if not is_duplicate:
-                                gas_usage_data.append(tx_details)
-
-                if len(transactions) < offset:
-                    break
-                page += 1
-            else:
-                logger.error(f"Etherscan API error: {data['message']}")
-                break
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {e}")
-            break
-        except Exception as e:
-            logger.error(f"An unexpected error occurred in fetch_historical_bids: {e}")
-            break
-
-    logger.info(f"Found and processed {len(gas_usage_data)} historical bid transactions.")
 
 # --- REPORT GENERATION FUNCTIONS ---
 
@@ -1172,41 +1084,6 @@ def generate_wallet_statistics_report(reward_data: List[Dict[str, Any]]) -> str:
         report_lines.append(format_report_row(row_values, col_widths))
         report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
         
-    return "\n".join(report_lines) + "\n"
-
-def generate_gas_usage_report(data: List[Dict[str, Any]]) -> str:
-    """Generates the Gas Usage report string."""
-    if not data:
-        return "Gas Usage Report:\nNo gas usage data to report for this cycle.\n"
-
-    headers = ["Timestamp (UTC)", "Tx Hash", "Gas Used", "Gas Price (GWEI)", "Tx Cost (S)"]
-    col_widths = [26, 66, 10, 18, 18]
-
-    report_lines = ["Gas Usage Report:"]
-    report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
-    report_lines.append(format_report_row(headers, col_widths))
-    report_lines.append("+" + "+".join(["=" * (w + 2) for w in col_widths]) + "+")
-
-    total_gas_used = 0
-    total_tx_cost_eth = 0.0
-
-    for entry in data:
-        row_values = [
-            entry["timestamp"].strftime('%Y-%m-%d %H:%M:%S'),
-            entry["tx_hash"],
-            str(entry["gas_used"]),
-            f"{entry['gas_price_gwei']:.2f}",
-            f"{entry['tx_cost_eth']:.8f}",
-        ]
-        report_lines.append(format_report_row(row_values, col_widths))
-        report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
-        total_gas_used += entry["gas_used"]
-        total_tx_cost_eth += float(entry["tx_cost_eth"])
-
-    report_lines.append(f"| Total Gas Used: {total_gas_used}".ljust(col_widths[0] + 3) +
-                        f"| Total Tx Cost (S): {total_tx_cost_eth:.8f}".ljust(col_widths[1] + 3) + "|")
-    report_lines.append("+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+")
-
     return "\n".join(report_lines) + "\n"
 
 def generate_post_auction_winner_report(final_bids: Dict[str, Dict[str, Any]], final_rewards: List[Dict[str, Any]]) -> str:
@@ -1470,12 +1347,6 @@ def main(force_mode: bool = False):
             raise ValueError("Wallet address in .env does not match private key for PoolBidder owner.")
     except Exception as e: logger.critical(f"Private key/Wallet validation error: {e}"); return
 
-    # Fetch historical bids
-    if AUCTION_END_TIME:
-        start_timestamp = int(AUCTION_END_TIME - (12 * 3600) + 600)
-        end_timestamp = int(AUCTION_END_TIME + 2)
-        fetch_historical_bids(w3_instance, "0xb46e0226c5cb834ef6fe7492cf37d70f8cee62f2", "0xC3e38729d53E3830Ab7365589A0A28cD73522BAE", "0x78d13d66", start_timestamp, end_timestamp)
-
     #logger.info("POOL SUPREMACY BID ATTEMPTS STARTED")
     #attempt_pool_supremacy_bids(w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance)
 
@@ -1489,7 +1360,9 @@ def main(force_mode: bool = False):
     except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
 
     initial_bid_pools = {
+        WS_AG_POOL: "AG-WS",
         WS_EGGS_POOL: "WS-EGGS",
+        WS_SCETH_POOL: "WS-SCETH"
     }
 
     pools_to_bid_ids: List[str] = []
@@ -1588,9 +1461,6 @@ def main(force_mode: bool = False):
                 # Generate the chronological bid log for our bidder's activities
                 bid_report_str = generate_bid_log_report(bid_log_data)
 
-                # Generate the gas usage report
-                gas_usage_report_str = generate_gas_usage_report(gas_usage_data)
-
                 # Generate the new, comprehensive winner report
                 final_winner_report_str = generate_post_auction_winner_report(highest_bids, final_rewards_data)
 
@@ -1599,13 +1469,11 @@ def main(force_mode: bool = False):
                 print("="*100)
                 print(final_winner_report_str) # Print the new report
                 print(bid_report_str) # Also print the detailed bid log
-                print(gas_usage_report_str) # Also print the gas usage log
                 print("="*100 + "\n")
 
                 # Clear logs for the next cycle
                 bid_log_data.clear()
                 reward_summary_data.clear() # Clearing this too, as it's no longer used for the main report
-                gas_usage_data.clear()
                 logger.info("Logs for the completed cycle have been cleared.")
                 
                 # Post-auction catch-up scan
@@ -1814,7 +1682,7 @@ def main(force_mode: bool = False):
                     actual_tte_for_scan_decision = (AUCTION_END_TIME - now_timestamp_utc) if AUCTION_END_TIME and not (SIMULATE_FINAL_WINDOW_MODE and simulated_auction_end_time_override is not None and (simulated_auction_end_time_override - now_timestamp_utc) > 0) else time_to_auction_end
 
                     if actual_tte_for_scan_decision < TTE_FOR_REDUCED_SCAN_RANGE:
-                        max_permissible_to_block = current_from_block + MAX_BLOCKS_PER_SCAN__TTE
+                        max_permissible_to_block = current_from_block + MAX_BLOCKS_PER_SCAN_LOW_TTE
                         if to_block > max_permissible_to_block: # Only reduce if current to_block is larger
                             to_block = max_permissible_to_block
                             logger.debug(f"Low TTE ({actual_tte_for_scan_decision:.2f}s): Event scan range reduced. New to_block: {to_block} (Original: {to_block_original})")

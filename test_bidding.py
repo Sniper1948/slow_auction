@@ -19,8 +19,7 @@ class TestBidding(unittest.TestCase):
         with patch('auction_bid.w3_instance.eth') as mock_eth, \
              patch('auction_bid.pool_bidder_contract_instance.functions.bidOnMultiplePools') as mock_bid_on_multiple_pools, \
              patch('auction_bid.w3_instance.eth.account.sign_transaction') as mock_sign_transaction, \
-             patch('auction_bid.w3_instance.eth.send_raw_transaction') as mock_send_raw_transaction, \
-             patch('auction_bid.get_transaction_details') as mock_get_transaction_details:
+             patch('auction_bid.w3_instance.eth.send_raw_transaction') as mock_send_raw_transaction:
 
             mock_eth.get_transaction_count.return_value = 1
             mock_eth.gas_price = 55 * 10**9
@@ -32,13 +31,6 @@ class TestBidding(unittest.TestCase):
             mock_bid_on_multiple_pools.return_value.build_transaction.return_value = {}
             mock_sign_transaction.return_value.rawTransaction = b''
             mock_send_raw_transaction.return_value.hex.return_value = '0x123'
-            mock_get_transaction_details.return_value = {
-                "tx_hash": "0x123",
-                "timestamp": "2025-08-04 10:49:25.373645",
-                "gas_used": 21000,
-                "gas_price_gwei": 55,
-                "tx_cost_eth": 0.001155
-            }
 
             pool_ids = [WS_USDC_POOL, WS_AG_POOL]
             bid_amounts = [0.0, 0.0]
@@ -54,52 +46,6 @@ class TestBidding(unittest.TestCase):
 
             self.assertTrue(success)
             self.assertEqual(tx_hash, '0x123')
-            mock_get_transaction_details.assert_called_once_with(w3_instance, '0x123')
-
-    def test_fetch_historical_bids(self):
-        with patch('auction_bid.requests.get') as mock_get, \
-             patch('auction_bid.get_transaction_details') as mock_get_transaction_details:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                "status": "1",
-                "result": [
-                    {
-                        "from": "0xb46e0226c5cb834ef6fe7492cf37d70f8cee62f2",
-                        "to": "0xc3e38729d53e3830ab7365589a0a28cd73522bae",
-                        "input": "0x78d13d66",
-                        "hash": "0x456",
-                        "timeStamp": str(int(time.time()))
-                    }
-                ]
-            }
-            mock_get.return_value = mock_response
-            mock_get_transaction_details.return_value = {
-                "tx_hash": "0x456",
-                "timestamp": "2025-08-05 04:26:19.411982",
-                "gas_used": 21000,
-                "gas_price_gwei": 55,
-                "tx_cost_eth": 0.001155
-            }
-
-            from auction_bid import fetch_historical_bids, gas_usage_data
-            gas_usage_data.clear()
-            start_timestamp = int(time.time()) - 3600
-            end_timestamp = int(time.time())
-            fetch_historical_bids(w3_instance, "0xb46e0226c5cb834ef6fe7492cf37d70f8cee62f2", "0xC3e38729d53E3830Ab7365589A0A28cD73522BAE", "0x78d13d66", start_timestamp, end_timestamp)
-            self.assertEqual(len(gas_usage_data), 1)
-            self.assertEqual(gas_usage_data[0]["tx_hash"], "0x456")
-
-    def test_get_transaction_details_retry(self):
-        with patch('auction_bid.w3_instance.eth') as mock_eth, \
-             patch('time.sleep') as mock_sleep:
-            mock_eth.get_transaction.side_effect = [Exception("not found"), Exception("not found"), MagicMock()]
-            mock_eth.get_transaction_receipt.side_effect = [Exception("not found"), Exception("not found"), MagicMock()]
-
-            from auction_bid import get_transaction_details
-            get_transaction_details(w3_instance, "0x789")
-            self.assertEqual(mock_sleep.call_count, 3)
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -133,7 +133,7 @@ event_scanner_failed: bool = False
 POOLS_ORIGINAL: Dict[str, str] = {} # Populated at startup
 hot_list_created: bool = False
 last_bids: Dict[str, float] = {} # Tracks last attempted bid amount for a pool if it failed low
-EARLY_BID_TIMES_CONFIG = sorted([808, 50], reverse=True) # Original config
+EARLY_BID_TIMES_CONFIG = sorted([808, 88], reverse=True)
 early_bid_times_queue: List[int] = [] # Mutable queue for current auction cycle
 early_bids_processed_for_threshold: Dict[int, bool] = {} # Tracks if a threshold time has been processed
 last_reward_check_time: float = 0
@@ -157,7 +157,7 @@ HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_
 NUMBER_OF_HOT_LISTS = 6 # Number of hotlists to create, we can increase this later
 HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] # Profit tiers for the hotlists
 
-FINAL_BID_WINDOW_START_TTE = 1 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
+FINAL_BID_WINDOW_START_TTE = 1.3 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
 
 # --- Hyper-Reactive Bidding Parameters ---
@@ -168,7 +168,7 @@ THREAD_INTERVAL = 0.07 # Interval between each bid thread
 
 # --- Task Skipping TTE Thresholds (to ensure responsiveness for final window) ---
 TTE_THRESHOLD_BALANCE_CHECK = 5.0 # Skip balance check if TTE < 5.0s
-TTE_THRESHOLD_BID_UPDATE = 1.8    # Skip bid updates if TTE < 1.8s
+TTE_THRESHOLD_BID_UPDATE = 8    # Skip bid updates if TTE < 8s
 TTE_THRESHOLD_EVENT_SCAN = 2.0    # Skip event scanning if TTE < 2.0s
 # Note: Periodic Reward Fetch is already governed by MIN_TTE_FOR_GENERAL_REWARD_FETCH = 45s
 
@@ -1885,6 +1885,7 @@ def main(force_mode: bool = False):
                 time.sleep(60)
         except ContractLogicError as e_cl_main: logger.error(f"Main Loop ContractLogicError: {e_cl_main}"); time.sleep(3)
         except Exception as e_unhandled_main: logger.exception(f"Unhandled Main Loop Error: {e_unhandled_main}"); time.sleep(5)
+        time.sleep(0.1)
 
 if __name__ == "__main__":
     try:

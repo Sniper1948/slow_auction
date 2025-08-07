@@ -164,7 +164,7 @@ FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
 MINIMUM_TTE_FOR_REACTION = 0.15  # Minimum TTE (seconds) to continue reactive bidding. Below this, likely too late.
 HYPER_REACTIVE_CHECK_INTERVAL = 0.02 # Sleep interval (seconds) between full check cycles of reactive pools.
 GET_CURRENT_BID_TIMEOUT_HYPER = 0.05 # Timeout (seconds) for get_current_bid in hyper-reactive mode (50ms).
-THREAD_INTERVAL = 0.1 # Interval between each bid thread
+THREAD_INTERVAL = 0.07 # Interval between each bid thread
 
 # --- Task Skipping TTE Thresholds (to ensure responsiveness for final window) ---
 TTE_THRESHOLD_BALANCE_CHECK = 5.0 # Skip balance check if TTE < 5.0s
@@ -463,7 +463,7 @@ def fetch_pool_rewards_data(sf_contract: Contract) -> List[Dict[str, Any]]:
     return results
 
 def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
-    global AUCTION_END_TIME, highest_bids, last_rewards, hot_list_created, early_bid_times_queue, early_bids_processed_for_threshold
+    global AUCTION_END_TIME, highest_bids, last_rewards, hot_list_created, early_bid_times_queue, early_bids_processed_for_threshold, has_entered_final_bidding
     global last_reward_check_time, POOLS, pool_locks, GLOBAL_AVG_BLOCK_TIME, CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK, bid_log_data, reward_summary_data
     logger.info("Resetting state for new auction cycle...")
     
@@ -471,6 +471,7 @@ def reset_auction_cycle_state(w3: Web3, sf_contract: Contract):
 
     last_rewards.clear(); highest_bids.clear(); last_bids.clear()
     hot_list_created = False
+    has_entered_final_bidding = False
     bid_log_data.clear()
     reward_summary_data.clear()
     
@@ -1405,11 +1406,12 @@ pool_bidder_contract_instance = w3_instance.eth.contract(address=POOL_BIDDER_CON
 
 def main(force_mode: bool = False):
     global AUCTION_END_TIME, highest_bids, last_rewards, event_scanner_failed
-    global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold
+    global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold, has_entered_final_bidding
     global last_reward_check_time, POOLS, pool_locks, GLOBAL_AVG_BLOCK_TIME, CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK
     global w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance
     global simulated_auction_end_time_override, simulation_has_run # Added for simulation mode
 
+    has_entered_final_bidding = False
     if not POOLS_ORIGINAL: POOLS_ORIGINAL.update(POOLS); 
     if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()} 
 
@@ -1633,7 +1635,8 @@ def main(force_mode: bool = False):
             final_bid_window_active = (0 < time_to_auction_end <= FINAL_BID_WINDOW_START_TTE) or \
                                       (force_mode and 0 < time_to_auction_end)      
             
-            if final_bid_window_active:
+            if final_bid_window_active and not has_entered_final_bidding:
+                has_entered_final_bidding = True
                 logger.info(f"Entering Final Bidding Phase (TTE: {time_to_auction_end:.2f}s).")
 
                 def bid_thread_target(pool_ids, bid_amounts, urgency):

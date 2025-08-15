@@ -3,7 +3,8 @@ import time
 from unittest.mock import MagicMock, patch, call
 from auction_bid import (
     place_multiple_bids_with_poolbidder,
-    execute_final_bidding_strategy,
+    create_hot_lists,
+    main,
     w3_instance,
     pool_bidder_contract_instance,
     WALLET_ADDRESS,
@@ -13,6 +14,11 @@ from auction_bid import (
     WS_USDC_POOL,
     WS_AG_POOL,
     HIGH_VALUE_BID_SENTINEL,
+    CONTRACT_DEFAULT_INCREMENT_AMOUNT,
+    CONTRACT_BIG_INCREMENT_AMOUNT,
+    HOT_LIST_MIN_POTENTIAL_PROFIT,
+    HOT_LIST_PROFIT_TIERS,
+    NUMBER_OF_HOT_LISTS,
 )
 import auction_bid
 
@@ -42,49 +48,54 @@ class TestBidding(unittest.TestCase):
             self.assertTrue(success)
             self.assertEqual(tx_hash, '0x123')
 
-class MockThread:
-    def __init__(self, target=None, args=(), kwargs=None):
-        self.target = target
-        self.args = args
-        self.kwargs = kwargs if kwargs is not None else {}
-    def start(self):
-        if self.target:
-            self.target(*self.args, **self.kwargs)
-
-@patch('auction_bid.threading.Thread', new=MockThread)
-class TestFinalBiddingStrategy(unittest.TestCase):
-    @patch('auction_bid.place_multiple_bids_with_poolbidder')
-    def test_single_transaction_with_mixed_bids(self, mock_place_bids):
-        # Arrange
-        auction_bid.hot_list_bids = {
-            '0xpool1': HIGH_VALUE_BID_SENTINEL,
-            '0xpool2': 0,
-            '0xpool3': HIGH_VALUE_BID_SENTINEL,
+class TestNewHotListLogic(unittest.TestCase):
+    def setUp(self):
+        # This setup will be used by both test methods
+        auction_bid.POOLS_ORIGINAL = {
+            'pool1': 'P1', # High profit
+            'pool2': 'P2', # Standard profit
+            'pool3': 'P3', # Low profit
+            'pool4': 'P4'  # No reward
         }
-        mock_w3 = MagicMock()
-        mock_pb_contract = MagicMock()
+        auction_bid.last_rewards = {
+            'pool1': 1.0,
+            'pool2': 0.15,
+            'pool3': 0.05
+        }
+        auction_bid.highest_bids = {
+            'pool1': {'amount': 0.5},
+            'pool2': {'amount': 0.0},
+            'pool3': {'amount': 0.0}
+        }
+        auction_bid.HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+        auction_bid.NUMBER_OF_HOT_LISTS = 6
+        auction_bid.CONTRACT_DEFAULT_INCREMENT_AMOUNT = 0.1
+        auction_bid.CONTRACT_BIG_INCREMENT_AMOUNT = 0.2
+        auction_bid.HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02
+        auction_bid.HIGH_VALUE_BID_SENTINEL = 5000
 
+    def test_create_hot_lists(self):
         # Act
-        execute_final_bidding_strategy(mock_w3, mock_pb_contract)
+        create_hot_lists()
 
         # Assert
-        mock_place_bids.assert_called_once()
+        hot_lists = auction_bid.hot_lists
 
-        args, kwargs = mock_place_bids.call_args
+        # Pool 1: High profit, should be in hotlist[0] with bid 0, and hotlist[1] with bid 5000
+        self.assertEqual(hot_lists[0].get('pool1'), 0)
+        self.assertEqual(hot_lists[1].get('pool1'), 5000)
 
-        self.assertEqual(args[0], mock_w3)
-        self.assertEqual(args[1], mock_pb_contract)
+        # Pool 2: Standard profit, should be in hotlist[0] with bid 0
+        self.assertEqual(hot_lists[0].get('pool2'), 0)
+        self.assertNotIn('pool2', hot_lists[1]) # Not profitable enough for tier 2
 
-        # Keys and values can be in any order, so we check them separately
-        self.assertCountEqual(args[2], ['0xpool1', '0xpool2', '0xpool3'])
-        self.assertCountEqual(args[3], [HIGH_VALUE_BID_SENTINEL, 0, HIGH_VALUE_BID_SENTINEL])
+        # Pool 3: Low profit, should not be in any hotlist
+        for i in range(NUMBER_OF_HOT_LISTS):
+            self.assertNotIn('pool3', hot_lists[i])
 
-        # Also check if the mapping is correct
-        sent_bids = dict(zip(args[2], args[3]))
-        self.assertDictEqual(sent_bids, auction_bid.hot_list_bids)
-
-        self.assertEqual(args[4], "URGENT")
-
+        # Pool 4: No reward, should not be in any hotlist
+        for i in range(NUMBER_OF_HOT_LISTS):
+            self.assertNotIn('pool4', hot_lists[i])
 
 if __name__ == '__main__':
     unittest.main()

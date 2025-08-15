@@ -64,7 +64,7 @@ ETHERSCAN_API_KEY = "NZNGTV5TX9WWFPSYGI7MZK9DFBAK74M3ZE"
 # Addresses
 SILVER_FEES_CONTRACT_ADDRESS = Web3.to_checksum_address("0xfeE899CF3Ef6FCf338Da86453c334973e015c236")
 NFT_POSITION_MANAGER_ADDRESS = Web3.to_checksum_address("0x5084E9fDF9264489A14E77C011073D757E572bB4")
-POOL_BIDDER_CONTRACT_ADDRESS = Web3.to_checksum_address("0xC3e38729d53E3830Ab7365589A0A28cD73522BAE") # Your deployed PoolBidder address
+POOL_BIDDER_CONTRACT_ADDRESS = Web3.to_checksum_address("0x4aA59D6f8267136B72164F40d3168a1dABFd2CBd") # Your deployed PoolBidder address
 
 # Pool Addresses
 WS_ZUPA_POOL = Web3.to_checksum_address("0xd4988f9b3438a620d07f41b1415859aba038158a")
@@ -150,12 +150,12 @@ EARLY_BID_MIN_REWARD_FOR_0_1_AG_BID = 0.1
 EARLY_BID_MAX_REWARD_FOR_0_1_AG_BID = 0.2 
 EARLY_BID_FIXED_AMOUNT = 0.1
 CONTRACT_DEFAULT_INCREMENT_AMOUNT = 0.1 # Standard increment your contract uses when bid amount 0 is passed
+CONTRACT_BIG_INCREMENT_AMOUNT = 0.2 # Big increment for special bids
+HIGH_VALUE_BID_SENTINEL = 5000 # Sentinel value for +0.2 AG bids
 
 HOT_LIST_CREATION_START_TTE = 45  # Start creating hot list 45s before end
 HOT_LIST_CREATION_END_TTE = 25    # Aim to have it done by 25s before end
 HOT_LIST_MIN_POTENTIAL_PROFIT = 0.02 # Reward > (current_bid + CONTRACT_DEFAULT_INCREMENT_AMOUNT) + THIS
-NUMBER_OF_HOT_LISTS = 6 # Number of hotlists to create, we can increase this later
-HOT_LIST_PROFIT_TIERS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] # Profit tiers for the hotlists
 
 FINAL_BID_WINDOW_START_TTE = 1.3 # Start final aggressive bidding window shortly before end - USER WILL TUNE THIS
 FINAL_BATCH_AUTO_INCREMENT_PROFIT_MARGIN = 0.02
@@ -204,14 +204,14 @@ except json.JSONDecodeError as e:
     raise
 
 try:
-    with open('PoolBidder.abi', 'r') as f:
+    with open('PoolBidder5000.abi', 'r') as f:
         POOL_BIDDER_ABI = json.load(f)
-    logger.info("Loaded PoolBidder.abi")
+    logger.info("Loaded PoolBidder5000.abi")
 except FileNotFoundError:
-    logger.critical("PoolBidder.abi not found. Make sure it's in the same directory as auto_bidder.py. Exiting.")
+    logger.critical("PoolBidder5000.abi not found. Make sure it's in the same directory as auto_bidder.py. Exiting.")
     raise
 except json.JSONDecodeError as e:
-    logger.critical(f"Failed to decode JSON in PoolBidder.abi: {e}. Exiting.")
+    logger.critical(f"Failed to decode JSON in PoolBidder5000.abi: {e}. Exiting.")
     raise
 
 class InMemoryState:
@@ -1404,6 +1404,25 @@ w3_instance = connect_to_blockchain(SONIC_RPC_URLS)
 silver_fees_contract_instance = w3_instance.eth.contract(address=SILVER_FEES_CONTRACT_ADDRESS, abi=SILVER_FEES_ABI)
 pool_bidder_contract_instance = w3_instance.eth.contract(address=POOL_BIDDER_CONTRACT_ADDRESS, abi=POOL_BIDDER_ABI)
 
+def execute_final_bidding_strategy(w3: Web3, pb_contract: Contract):
+    """
+    Executes the final bidding strategy by creating and starting a thread for the hot list.
+    """
+    global has_entered_final_bidding, hot_list_bids
+
+    has_entered_final_bidding = True
+    logger.info("Entering Final Bidding Phase.")
+
+    def bid_thread_target(pool_ids, bid_amounts, urgency):
+        place_multiple_bids_with_poolbidder(w3, pb_contract, pool_ids, bid_amounts, urgency)
+
+    if hot_list_bids:
+        pool_ids = list(hot_list_bids.keys())
+        bid_amounts = list(hot_list_bids.values())
+        logger.info(f"Threaded Bid Add: {len(pool_ids)} pools from the hotlist.")
+        bid_thread = threading.Thread(target=bid_thread_target, args=(pool_ids, bid_amounts, "URGENT"))
+        bid_thread.start()
+
 def main(force_mode: bool = False):
     global AUCTION_END_TIME, highest_bids, last_rewards, event_scanner_failed
     global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold, has_entered_final_bidding
@@ -1415,7 +1434,7 @@ def main(force_mode: bool = False):
     if not POOLS_ORIGINAL: POOLS_ORIGINAL.update(POOLS); 
     if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()} 
 
-    hot_lists = [{} for _ in range(NUMBER_OF_HOT_LISTS)]
+    hot_list_bids = {}
 
     last_sync_check_time = 0.0  # Track last check (this is how we see if they updated the end time)
 
@@ -1636,21 +1655,7 @@ def main(force_mode: bool = False):
                                       (force_mode and 0 < time_to_auction_end)      
             
             if final_bid_window_active and not has_entered_final_bidding:
-                has_entered_final_bidding = True
-                logger.info(f"Entering Final Bidding Phase (TTE: {time_to_auction_end:.2f}s).")
-
-                def bid_thread_target(pool_ids, bid_amounts, urgency):
-                    place_multiple_bids_with_poolbidder(w3_instance, pool_bidder_contract_instance, pool_ids, bid_amounts, urgency)
-
-                for i in range(NUMBER_OF_HOT_LISTS):
-                    hotlist = hot_lists[i]
-                    if hotlist:
-                        pool_ids = list(hotlist.keys())
-                        bid_amounts = [0.0] * len(pool_ids)
-                        logger.info(f"Threaded Bid Add: {len(pool_ids)} pools from hotlist {i+1}")
-                        bid_thread = threading.Thread(target=bid_thread_target, args=(pool_ids, bid_amounts, "URGENT"))
-                        bid_thread.start()
-                    time.sleep(THREAD_INTERVAL)
+                execute_final_bidding_strategy(w3_instance, pool_bidder_contract_instance)
 
             if time_to_auction_end > TTE_THRESHOLD_BALANCE_CHECK and \
                (now_timestamp_utc - last_pb_bal_check_time >= 600):
@@ -1739,36 +1744,33 @@ def main(force_mode: bool = False):
                     logger.debug(f"[SIMULATION] Skipping early bids processing block due to SIMULATE_FINAL_WINDOW_MODE active (Simulated TTE: {time_to_auction_end:.2f}s would have met threshold {early_bid_times_queue[0]}s).")
 
                 if not hot_list_created and HOT_LIST_CREATION_END_TTE < time_to_auction_end <= HOT_LIST_CREATION_START_TTE:
-                    # Note: time_to_auction_end here will be the simulated TTE if SIMULATE_FINAL_WINDOW_MODE is True.
-                    # Hotlist creation might behave unexpectedly if SIMULATE_TTE_START is within its window.
-                    # For robust simulation of just the final window, ensure SIMULATE_TTE_START is below HOT_LIST_CREATION_END_TTE (25s).
-                    # Current SIMULATE_TTE_START = 20.0s, so this is fine.
-                    logger.info(f"Creating Hot Lists (TTE: {time_to_auction_end:.2f}s). Using cached rewards only.")
-                    hot_lists = [{} for _ in range(NUMBER_OF_HOT_LISTS)]
+                    logger.info(f"Creating Hot List with bid amounts (TTE: {time_to_auction_end:.2f}s).")
+                    hot_list_bids.clear()
+
                     for pid, pname in POOLS_ORIGINAL.items():
                         reward = last_rewards.get(pid)
                         if reward is None:
-                            logger.debug(f"HotList: Skipping {pname}, no cached reward.")
                             continue
+
                         cb = highest_bids.get(pid, {}).get("amount", 0.0)
 
-                        # First hotlist: all profitable bids
-                        hypothetical_next_bid_val = cb + CONTRACT_DEFAULT_INCREMENT_AMOUNT if cb > 0 else CONTRACT_DEFAULT_INCREMENT_AMOUNT
-                        if reward > hypothetical_next_bid_val + HOT_LIST_MIN_POTENTIAL_PROFIT:
-                            hot_lists[0][pid] = pname
-                            logger.info(f"HotList 1 ADD: {pname} (R:{reward:.3f} C:{cb:.3f} ProfitPostContractBid:{(reward - hypothetical_next_bid_val):.3f})")
-
-                        # Subsequent hotlists based on profit tiers
-                        for i in range(1, NUMBER_OF_HOT_LISTS):
-                            if reward > cb + HOT_LIST_PROFIT_TIERS[i]:
-                                hot_lists[i][pid] = pname
-                                logger.info(f"HotList {i+1} ADD: {pname} (R:{reward:.3f} C:{cb:.3f} Profit > {HOT_LIST_PROFIT_TIERS[i]})")
+                        hypothetical_big_bid = cb + CONTRACT_BIG_INCREMENT_AMOUNT
+                        if reward > hypothetical_big_bid + HOT_LIST_MIN_POTENTIAL_PROFIT:
+                            hot_list_bids[pid] = HIGH_VALUE_BID_SENTINEL
+                            logger.info(f"HotList ADD: {pname} with HIGH_VALUE_BID_SENTINEL (R:{reward:.3f} > {(hypothetical_big_bid + HOT_LIST_MIN_POTENTIAL_PROFIT):.3f})")
+                        else:
+                            hypothetical_standard_bid = cb + CONTRACT_DEFAULT_INCREMENT_AMOUNT
+                            if reward > hypothetical_standard_bid + HOT_LIST_MIN_POTENTIAL_PROFIT:
+                                hot_list_bids[pid] = 0
+                                logger.info(f"HotList ADD: {pname} with bid 0 (R:{reward:.3f} > {(hypothetical_standard_bid + HOT_LIST_MIN_POTENTIAL_PROFIT):.3f})")
 
                     POOLS.clear()
-                    if hot_lists[0]:
-                        POOLS.update(hot_lists[0])
+                    if hot_list_bids:
+                        pools_to_monitor = {pid: POOLS_ORIGINAL[pid] for pid in hot_list_bids.keys()}
+                        POOLS.update(pools_to_monitor)
+
                     pool_locks = {hpid: Lock() for hpid in POOLS.keys()}
-                    logger.info(f"Hot List ACTIVE with {len(POOLS)} pools: {list(POOLS.values())}")
+                    logger.info(f"Hot List ACTIVE with {len(POOLS)} pools.")
 
                     hot_list_created = True
                     log_auction_state_to_file()

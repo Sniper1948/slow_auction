@@ -1517,15 +1517,6 @@ def main(force_mode: bool = False):
             raise ValueError("Wallet address in .env does not match private key for PoolBidder owner.")
     except Exception as e: logger.critical(f"Private key/Wallet validation error: {e}"); return
 
-    # Fetch historical bids
-    if AUCTION_END_TIME:
-        start_timestamp = int(AUCTION_END_TIME - (12 * 3600) + 600)
-        end_timestamp = int(AUCTION_END_TIME + 2)
-        fetch_historical_bids(w3_instance, WALLET_ADDRESS, "0xC3e38729d53E3830Ab7365589A0A28cD73522BAE", "0x78d13d66", start_timestamp, end_timestamp)
-
-    #logger.info("POOL SUPREMACY BID ATTEMPTS STARTED")
-    #attempt_pool_supremacy_bids(w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance)
-
     if force_mode:
         event_scan_state.reset()
         logger.info("Force mode activated. EventScanner state reset.")
@@ -1534,6 +1525,15 @@ def main(force_mode: bool = False):
 
     try: reset_auction_cycle_state(w3_instance, silver_fees_contract_instance)
     except Exception as e: logger.critical(f"Initial auction state setup failed: {e}. Exiting."); sys.exit(1)
+
+    # Fetch historical bids
+    if AUCTION_END_TIME:
+        start_timestamp = int(AUCTION_END_TIME - (12 * 3600) + 600)
+        end_timestamp = int(AUCTION_END_TIME + 2)
+        fetch_historical_bids(w3_instance, WALLET_ADDRESS, "0xC3e38729d53E3830Ab7365589A0A28cD73522BAE", "0x78d13d66", start_timestamp, end_timestamp)
+
+    #logger.info("POOL SUPREMACY BID ATTEMPTS STARTED")
+    #attempt_pool_supremacy_bids(w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance)
 
     initial_bid_pools = {
         WS_EGGS_POOL: "WS-EGGS",

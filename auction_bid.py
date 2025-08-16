@@ -207,14 +207,14 @@ except json.JSONDecodeError as e:
     raise
 
 try:
-    with open('PoolBidder5000.abi', 'r') as f:
+    with open('PoolBidder5000v2.abi', 'r') as f:
         POOL_BIDDER_ABI = json.load(f)
-    logger.info("Loaded PoolBidder5000.abi")
+    logger.info("Loaded PoolBidder5000v2.abi")
 except FileNotFoundError:
-    logger.critical("PoolBidder5000.abi not found. Make sure it's in the same directory as auto_bidder.py. Exiting.")
+    logger.critical("PoolBidder5000v2.abi not found. Make sure it's in the same directory as auto_bidder.py. Exiting.")
     raise
 except json.JSONDecodeError as e:
-    logger.critical(f"Failed to decode JSON in PoolBidder5000.abi: {e}. Exiting.")
+    logger.critical(f"Failed to decode JSON in PoolBidder5000v2.abi: {e}. Exiting.")
     raise
 
 class InMemoryState:

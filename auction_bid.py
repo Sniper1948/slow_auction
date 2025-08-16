@@ -31,6 +31,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
+logging.Formatter.converter = time.gmtime
 logger = logging.getLogger(__name__)
 logger.info(f"Script version: {SCRIPT_VERSION}")
 
@@ -1693,7 +1694,7 @@ def main(force_mode: bool = False):
                         logger.info(f"Threaded Bid Add: {len(pool_ids)} pools from hotlist {i+1}")
                         bid_thread = threading.Thread(target=bid_thread_target, args=(pool_ids, bid_amounts, "URGENT"))
                         bid_thread.start()
-                    time.sleep(THREAD_INTERVAL)
+                        time.sleep(THREAD_INTERVAL) # This is already inside the if hotlist block
 
             if time_to_auction_end > TTE_THRESHOLD_BALANCE_CHECK and \
                (now_timestamp_utc - last_pb_bal_check_time >= 600):

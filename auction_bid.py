@@ -48,7 +48,7 @@ WALLET_ADDRESS = Web3.to_checksum_address(WALLET_ADDRESS)
 logger.info(f"Operator Wallet Address (owns PoolBidder): {WALLET_ADDRESS}")
 
 
-AG_TOKEN = Web3.to_checksum_address("0x8580A00aC6C746a564b338224fDe37617ab7DEE5")
+AG_TOKEN = Web3.to_checksum_address("0x005851f943ee2957b1748957f26319e4f9edebc1")
 
 # RPCs
 SONIC_RPC_URLS = [
@@ -64,7 +64,7 @@ ETHERSCAN_API_KEY = "NZNGTV5TX9WWFPSYGI7MZK9DFBAK74M3ZE"
 # Addresses
 SILVER_FEES_CONTRACT_ADDRESS = Web3.to_checksum_address("0xfeE899CF3Ef6FCf338Da86453c334973e015c236")
 NFT_POSITION_MANAGER_ADDRESS = Web3.to_checksum_address("0x5084E9fDF9264489A14E77C011073D757E572bB4")
-POOL_BIDDER_CONTRACT_ADDRESS = Web3.to_checksum_address("0xF5a9E4408D850dcbA7A892895d10913C8E14d347") # Your deployed PoolBidder address
+POOL_BIDDER_CONTRACT_ADDRESS = Web3.to_checksum_address("0x8580A00aC6C746a564b338224fDe37617ab7DEE5") # Your deployed PoolBidder address
 
 # Pool Addresses
 WS_ZUPA_POOL = Web3.to_checksum_address("0xd4988f9b3438a620d07f41b1415859aba038158a")
@@ -123,6 +123,7 @@ HEADERS = {
 }
 
 # Global state
+hot_lists = []
 GLOBAL_AVG_BLOCK_TIME: float = 2.0 # Default average block time for Sonic (in seconds)
 CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK: Optional[int] = None # Used to set the start block for event scanner for a new cycle
 AUCTION_END_TIME: Optional[float] = None
@@ -1452,14 +1453,12 @@ def main(force_mode: bool = False):
     global AUCTION_END_TIME, highest_bids, last_rewards, event_scanner_failed
     global hot_list_created, last_bids, early_bid_times_queue, early_bids_processed_for_threshold, has_entered_final_bidding
     global last_reward_check_time, POOLS, pool_locks, GLOBAL_AVG_BLOCK_TIME, CYCLE_SPECIFIC_EVENT_SCAN_START_BLOCK
-    global w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance
+    global w3_instance, silver_fees_contract_instance, pool_bidder_contract_instance, hot_lists
     global simulated_auction_end_time_override, simulation_has_run # Added for simulation mode
 
     has_entered_final_bidding = False
     if not POOLS_ORIGINAL: POOLS_ORIGINAL.update(POOLS); 
-    if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()} 
-
-    hot_lists = [{} for _ in range(NUMBER_OF_HOT_LISTS)]
+    if not pool_locks: pool_locks = {pid: Lock() for pid in POOLS_ORIGINAL.keys()}
 
     last_sync_check_time = 0.0  # Track last check (this is how we see if they updated the end time)
 

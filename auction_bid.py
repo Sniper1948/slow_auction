@@ -48,7 +48,7 @@ WALLET_ADDRESS = Web3.to_checksum_address(WALLET_ADDRESS)
 logger.info(f"Operator Wallet Address (owns PoolBidder): {WALLET_ADDRESS}")
 
 
-AG_TOKEN = Web3.to_checksum_address("0x005851f943ee2957b1748957f26319e4f9edebc1")
+AG_TOKEN = Web3.to_checksum_address("0x8580A00aC6C746a564b338224fDe37617ab7DEE5")
 
 # RPCs
 SONIC_RPC_URLS = [

@@ -45,12 +45,7 @@ contract PoolBidder is Ownable {
         nftPositionManager = IERC721(_nftPositionManager);
     }
 
-    modifier onlyOwnerOrSelf() {
-        require(msg.sender == owner() || msg.sender == address(this), "Unauthorized caller");
-        _;
-    }
-
-    function bidOnPool(address pool, uint256 specificAmount) external onlyOwnerOrSelf {
+    function bidOnPool(address pool, uint256 specificAmount) external onlyOwner {
         _bidOnPool(pool, specificAmount);
     }
 

@@ -34,6 +34,38 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
 
 # From auction_bid.py
 AG_TOKEN = Web3.to_checksum_address("0x005851f943ee2957b1748957f26319e4f9edebc1")
+POOLS = {
+    "0xd4988f9b3438a620d07f41b1415859aba038158a": "WS-ZUPA",
+    "0x3dbf257817866ee785edd0329daf36b5c198c3fd": "WS-ECO",
+    "0x741146bbd931aa7799979206df1ab61905512bed": "WS-JOINT",
+    "0x72d158eeed476b875ec4e50bd56834c1dbfd372d": "WS-GOGLZ",
+    "0x0139666fddd275d08353b248e42eea096d61d78f": "WS-RACKS",
+    "0x9f46dd8f2a4016c26c1cf1f4ef90e5e1928d756b": "WS-USDC",
+    "0x54e533E8d101f7C1660a5Cc62f841f2673c638BE": "AG-WS",
+    "0x6671c0684b54e0a6f6ee2f878f2b217bca1f8291": "WS-ANON",
+    "0xd451a16d7d5414abe8c883ed98aa3c47d00435ea": "WS-SDIGGA",
+    "0x2d0ae637493bd895fde19b55e665e7dfbaebfc8d": "WS-SCETH",
+    "0x9208db26a52b7046a94d1771dc629452c6c2fa20": "WS-WETH",
+    "0x23802c542a5af9f09c31ce28ba669dcf641aa1f8": "WS-EGGS",
+    "0x899fa124768994e5788f63d1b8bff0261a819bcf": "WS-WHALE",
+    "0x86193d8058d9b80b9e0bf69de3279c7d7a9644ed": "WS-DERP",
+    "0x5188885473bc80d7e2c8389b2ccda2b69e5d78e2": "WS-THC",
+    "0x1b7d76d8ba70ec6d5cc7c1c4e38b591c9e4c2397": "WS-PHANIC",
+    "0x6c9b8827c7fecd8e19d504d57308a50269343aad": "AG-SCETH",
+    "0xcfaecabcb3ea73acc94202458cb4fcc0d077e894": "USDC-ANON",
+    "0xa741c001e7d37b4e312ab60374c869a89bf894c4": "USDC-SCUSD",
+    "0x9107c409838f09d487421bfdac2c45c1ab320eae": "USDC-FRXUSD",
+    "0xcc3d28191e8567dfae1ea280dadb798cf3b4172c": "SCETH-WETH",
+    "0xbc9726639897b4cdbdd97d6b8e067140e6de9403": "HEDGY-ANON",
+    "0xa08851a8D67E26BBddF8c55cc0Dc649fb50164a5": "USDC-AUR",
+    "0xd455bc762cd8606788516ab11f3116f8712db2d5": "WS-SONIC",
+    "0x697aaBd91B48ee8066Ff46318D50ad361880Ef49": "frxETH-WETH",
+    "0x55eD5A63a5e833DC6FCDf5B3e009963e1B473b50": "WS-INDI",
+    "0x12c83F2615939b543E369F2b9D0230D574150E06": "WS-SCUSD",
+    "0x8e788A87bEf84Be47fEa007868281Af3160F96e6": "AG-USDC",
+    "0x581ea7d19DD893858abC7AcbB31Ea83c261A18F5": "WS-HEDGY",
+    "0xD4B18Acd107874e446bC7e3f4f3d277Cb6c1523d": "WS-WOOF"
+}
 HEADERS = {
     "authority": "silverswap.io", "accept": "*/*", "accept-language": "en-GB,en;q=0.8",
     "content-type": "text/plain;charset=UTF-8", "origin": "https://silverswap.io",
@@ -72,10 +104,10 @@ def get_api_rewards(w3: Web3, silver_fees_contract, pool_address: str) -> dict:
             return results
 
     except requests.exceptions.RequestException as he:
-        print(f"API request error: {he}")
+        # Don't print error, just return it
         return {"error": str(he)}
     except Exception as e:
-        print(f"An error occurred during API reward fetching: {e}")
+        # Don't print error, just return it
         return {"error": str(e)}
 
 
@@ -135,21 +167,10 @@ def get_onchain_rewards(w3: Web3, pool_address: str) -> dict:
         return results
 
     except Exception as e:
-        print(f"An error occurred during on-chain reward calculation: {e}")
+        # Don't print error, just return it
         return {"error": str(e)}
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python reward_verifier.py <pool_address>")
-        sys.exit(1)
-
-    pool_to_check = sys.argv[1]
-    if not Web3.is_address(pool_to_check):
-        print(f"Error: Invalid pool address provided.")
-        sys.exit(1)
-
-    pool_to_check = Web3.to_checksum_address(pool_to_check)
-
     print(f"Connecting to Sonic RPC at {SONIC_RPC_URL}...")
     w3_instance = Web3(Web3.HTTPProvider(SONIC_RPC_URL))
 
@@ -158,62 +179,60 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print("Connection successful.")
-    print(f"\nVerifying rewards for pool: {pool_to_check}")
 
     # Instantiate SilverFees contract (needed by both functions)
     silver_fees_contract = w3_instance.eth.contract(address=SILVER_FEES_CONTRACT_ADDRESS, abi=SILVER_FEES_ABI)
 
-    # --- Fetch Data ---
-    print("\nFetching data from API and On-Chain...")
-    onchain_data = get_onchain_rewards(w3_instance, pool_to_check)
-    api_data = get_api_rewards(w3_instance, silver_fees_contract, pool_to_check)
-    print("...fetch complete.")
-
-    # --- Process and Compare ---
-    api_rewards = api_data.get('api_rewards', {})
-    onchain_rewards = onchain_data.get('onchain_rewards', {})
-
-    if not api_rewards or not onchain_rewards:
-        print("\nCould not retrieve all necessary data. Exiting.")
-        if api_data.get('error'): print(f"API Error: {api_data.get('error')}")
-        if onchain_data.get('error'): print(f"On-Chain Error: {onchain_data.get('error')}")
+    # Determine the reward token once
+    try:
+        is_wrapped = silver_fees_contract.functions.isSwapToWrappedToken().call()
+        if is_wrapped:
+            reward_token_address = silver_fees_contract.functions.wrappedToken().call()
+            reward_token_name = "Wrapped Token"
+        else:
+            reward_token_address = silver_fees_contract.functions.silverToken().call()
+            reward_token_name = "$AG"
+        print(f"\nReward Token for this cycle is: {reward_token_name} ({reward_token_address})")
+    except Exception as e:
+        print(f"Could not determine reward token. Error: {e}")
         sys.exit(1)
 
-    # Determine the reward token
-    is_wrapped = silver_fees_contract.functions.isSwapToWrappedToken().call()
-    if is_wrapped:
-        reward_token_address = silver_fees_contract.functions.wrappedToken().call()
-        reward_token_name = "Wrapped Token"
-    else:
-        reward_token_address = silver_fees_contract.functions.silverToken().call()
-        reward_token_name = "$AG"
+    for pool_address, pool_name in POOLS.items():
+        pool_address = Web3.to_checksum_address(pool_address)
+        print(f"\n{'='*20} Verifying: {pool_name} ({pool_address}) {'='*20}")
 
-    # Find the corresponding on-chain reward
-    onchain_reward_to_compare = 0.0
-    token0_info = onchain_rewards.get('token0', {})
-    token1_info = onchain_rewards.get('token1', {})
+        # --- Fetch Data ---
+        onchain_data = get_onchain_rewards(w3_instance, pool_address)
+        api_data = get_api_rewards(w3_instance, silver_fees_contract, pool_address)
 
-    if token0_info.get('address') == reward_token_address:
-        onchain_reward_to_compare = token0_info.get('amount_formatted', 0.0)
-    elif token1_info.get('address') == reward_token_address:
-        onchain_reward_to_compare = token1_info.get('amount_formatted', 0.0)
+        # --- Process and Compare ---
+        api_rewards = api_data.get('api_rewards')
+        onchain_rewards = onchain_data.get('onchain_rewards')
 
-    # --- Display Results ---
-    print("\n--- Reward Verification Results ---")
-    print(f"Reward Token: {reward_token_name} ({reward_token_address})")
-    print("-" * 35)
+        if not api_rewards or not onchain_rewards:
+            if api_data.get('error'): print(f"  API Error: {api_data.get('error')}")
+            if onchain_data.get('error'): print(f"  On-Chain Error: {onchain_data.get('error')}")
+            continue
 
-    api_reward_val = api_rewards.get('reward_agency', 0.0)
-    print(f"API Result:          {api_reward_val:.18f}")
-    print(f"On-Chain Result:     {onchain_reward_to_compare:.18f}")
+        # Find the corresponding on-chain reward
+        onchain_reward_to_compare = 0.0
+        token0_info = onchain_rewards.get('token0', {})
+        token1_info = onchain_rewards.get('token1', {})
 
-    difference = abs(api_reward_val - onchain_reward_to_compare)
-    print(f"Difference:          {difference:.18f}")
+        if token0_info.get('address') == reward_token_address:
+            onchain_reward_to_compare = token0_info.get('amount_formatted', 0.0)
+        elif token1_info.get('address') == reward_token_address:
+            onchain_reward_to_compare = token1_info.get('amount_formatted', 0.0)
 
-    print("-" * 35)
-    print("\nNote: A small difference is expected due to fee accumulation over time and potential timing differences between API and on-chain queries.")
+        # --- Display Results ---
+        api_reward_val = api_rewards.get('reward_agency', 0.0)
 
-    print("\n--- Detailed On-Chain Data ---")
-    print(f"  Token 0 ({token0_info.get('address')}): {token0_info.get('amount_formatted', 'N/A'):.18f}")
-    print(f"  Token 1 ({token1_info.get('address')}): {token1_info.get('amount_formatted', 'N/A'):.18f}")
-    print("--------------------------------\n")
+        print(f"  API Result:          {api_reward_val:.18f}")
+        print(f"  On-Chain Result:     {onchain_reward_to_compare:.18f}")
+
+        difference = abs(api_reward_val - onchain_reward_to_compare)
+        print(f"  Difference:          {difference:.18f}")
+
+    print(f"\n{'='*20} Verification Complete {'='*20}\n")
+    print("Note: A small difference is expected due to fee accumulation over time and potential timing differences between API and on-chain queries.")
+    print("Large differences may indicate that the API data is stale or incorrect.")

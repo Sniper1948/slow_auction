@@ -170,8 +170,16 @@ def get_onchain_rewards(w3: Web3, quoter_contract, silver_fees_contract, wrapped
         token0_contract = w3.eth.contract(address=token0_address, abi=ERC20_ABI)
         token1_contract = w3.eth.contract(address=token1_address, abi=ERC20_ABI)
 
-        token0_symbol = token0_contract.functions.symbol().call()
-        token1_symbol = token1_contract.functions.symbol().call()
+        try:
+            token0_symbol = token0_contract.functions.symbol().call()
+        except Exception:
+            token0_symbol = token0_address[:5] + "..."
+
+        try:
+            token1_symbol = token1_contract.functions.symbol().call()
+        except Exception:
+            token1_symbol = token1_address[:5] + "..."
+
         token0_decimals = token0_contract.functions.decimals().call()
         token1_decimals = token1_contract.functions.decimals().call()
 

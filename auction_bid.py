@@ -671,7 +671,8 @@ def place_bid_with_poolbidder(w3: Web3, pb_contract: Contract, bid_amount_eth: f
     tx_hash_hex = None 
     try:
         bid_wei = w3.to_wei(rounded_bid, 'ether')
-        gas_mult = {"URGENT": 1.5, "NORMAL": 1.1, "LOW": 1}.get(urgency, 1)
+        # gas_mult = 1.4 if urgency == "URGENT" else 1.25
+        gas_mult = {"URGENT": 1.5, "NORMAL": 1.25, "LOW": 1}.get(urgency, 1)
         with nonce_lock:
             current_gas_price = w3.eth.gas_price
             tx_params = {
@@ -789,7 +790,8 @@ def place_multiple_bids_with_poolbidder(w3: Web3, pb_contract: Contract, pool_id
         with nonce_lock:
             bid_amounts_wei = [w3.to_wei(round(amount, 8), 'ether') if amount != 0.0 else 0 for amount in bid_amounts_eth]
 
-            gas_mult = {"URGENT": 1.5, "NORMAL": 1.1, "LOW": 1}.get(urgency, 1)
+            #gas_mult = 1.45 if urgency == "URGENT" else 1.3
+            gas_mult = {"URGENT": 1.5, "NORMAL": 1.25, "LOW": 1}.get(urgency, 1)
             current_gas_price = w3.eth.gas_price
             tx_params = {
                 'from': WALLET_ADDRESS,
